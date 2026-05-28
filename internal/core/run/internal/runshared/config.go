@@ -26,6 +26,8 @@ type Config struct {
 	ReasoningEffort        string
 	AccessMode             string
 	TaskRuntimeRules       []model.TaskRuntimeRule
+	MultipleMode           string
+	SelectedTasks          []string
 	Mode                   model.ExecutionMode
 	OutputFormat           model.OutputFormat
 	Verbose                bool
@@ -129,6 +131,8 @@ func NewConfig(src *model.RuntimeConfig, runArtifacts model.RunArtifacts) *Confi
 		ReasoningEffort:        src.ReasoningEffort,
 		AccessMode:             src.AccessMode,
 		TaskRuntimeRules:       model.CloneTaskRuntimeRules(src.TaskRuntimeRules),
+		MultipleMode:           src.MultipleMode,
+		SelectedTasks:          append([]string(nil), src.SelectedTasks...),
 		Mode:                   src.Mode,
 		OutputFormat:           src.OutputFormat,
 		Verbose:                src.Verbose,

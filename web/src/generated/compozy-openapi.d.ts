@@ -971,27 +971,35 @@ export interface components {
             title: string;
         };
         TaskRunRequest: {
+            /** @enum {string} */
+            multiple_mode?: "sequential" | "parallel";
             presentation_mode?: string;
             runtime_overrides?: {
                 [key: string]: unknown;
             };
+            selected_tasks?: string[];
             workspace?: string;
         };
         TaskRunMultipleItem: {
             error_text?: string;
             run_id?: string;
             slug: string;
+            selected_task?: string;
             /** @enum {string} */
             status: "queued" | "active" | "completed" | "failed" | "canceled";
         };
         TaskRunMultipleRequest: {
             /** @enum {string} */
-            mode?: "enqueued" | "parallel";
+            mode?: "enqueued" | "sequential" | "parallel";
+            /** @enum {string} */
+            multiple_mode?: "sequential" | "parallel";
             presentation_mode?: string;
             runtime_overrides?: {
                 [key: string]: unknown;
             };
-            slugs: string[];
+            selected_tasks?: string[];
+            slugs?: string[];
+            workflow_slug?: string;
             workspace?: string;
         };
         TaskRunMultipleSnapshotResponse: {

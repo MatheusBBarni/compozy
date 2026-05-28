@@ -298,7 +298,7 @@ func TestRunManagerTaskRunMultiplePreflightRejectsInvalidInputBeforeParentRun(t 
 		}
 	})
 
-	t.Run("Should reject parallel mode before creating parent", func(t *testing.T) {
+	t.Run("Should accept parallel mode contract before orchestration is implemented", func(t *testing.T) {
 		t.Parallel()
 
 		env := newRunManagerTestEnv(
@@ -318,15 +318,8 @@ func TestRunManagerTaskRunMultiplePreflightRejectsInvalidInputBeforeParentRun(t 
 				RuntimeOverrides: rawJSON(t, `{"run_id":"task-multi-parallel-mode"}`),
 			},
 		)
-		assertProblemStatus(t, err, http.StatusUnprocessableEntity)
-		if _, err := env.globalDB.GetRun(
-			context.Background(),
-			"task-multi-parallel-mode",
-		); !errors.Is(
-			err,
-			globaldb.ErrRunNotFound,
-		) {
-			t.Fatalf("GetRun(task-multi-parallel-mode) error = %v, want ErrRunNotFound", err)
+		if err != nil {
+			t.Fatalf("StartTaskRunMultiple(parallel) error = %v", err)
 		}
 	})
 
@@ -397,9 +390,9 @@ func TestResolveTaskMultiMode(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{name: "Should default empty mode to enqueued", want: "enqueued"},
+		{name: "Should default empty mode to sequential", want: "sequential"},
 		{name: "Should preserve enqueued mode", raw: " enqueued ", want: "enqueued"},
-		{name: "Should reject parallel mode", raw: " parallel ", wantErr: true},
+		{name: "Should preserve parallel mode", raw: " parallel ", want: "parallel"},
 		{name: "Should reject unsupported mode", raw: "unsupported", wantErr: true},
 	}
 	for _, tc := range cases {

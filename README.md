@@ -174,7 +174,7 @@ types = ["frontend", "backend", "docs", "test", "infra", "refactor", "chore", "b
 
 [tasks.run]
 include_completed = false
-run_multiple_mode = "enqueued"
+multiple = "sequential"
 
 [exec]
 output_format = "text"
@@ -194,7 +194,7 @@ Supported sections:
 - `[defaults]` for shared execution defaults such as `ide`, `model`, `reasoning_effort`, `access_mode`, `timeout`, `tail_lines`, `add_dirs`, `auto_commit`, `max_retries`, and `retry_backoff_multiplier`
 - `[exec]` for `output_format` plus exec-specific runtime overrides such as `ide`, `model`, `reasoning_effort`, `access_mode`, `timeout`, `tail_lines`, `add_dirs`, `max_retries`, and `retry_backoff_multiplier`
 - `[tasks]` for the allowed task `type` list used by `cy-create-tasks` and `compozy tasks validate`
-- `[tasks.run]` for workflow-run defaults used by `compozy tasks run`, such as `include_completed` and `run_multiple_mode`
+- `[tasks.run]` for workflow-run defaults used by `compozy tasks run`, such as `include_completed` and `multiple`
 - `[fix_reviews]` for `concurrent`, `batch_size`, and `include_resolved`
 - `[fetch_reviews]` for `provider` and `nitpicks` (controls CodeRabbit review-body comments; default is enabled when unset)
 - `[sound]` for optional run-completion audio presets or absolute file paths
@@ -205,8 +205,8 @@ Notes:
 - `.compozy/tasks` remains the fixed workflow root in this version; the config file does not change the workflow root path.
 - Unknown keys and invalid value types are rejected during config loading.
 - Relative `add_dirs` are resolved against the owning config scope: the user home directory for `~/.compozy/config.toml` and the workspace root for `.compozy/config.toml`.
-- `[tasks.run] run_multiple_mode` controls `tasks run --multiple` scheduling. When unset, the built-in default is `"enqueued"`.
-- `run_multiple_mode = "parallel"` is accepted in V1 for forward-compatible config, but Compozy prints a V2 worktree-isolation fallback message and runs the queue in enqueued order. Real parallel multi-run execution waits for git worktree isolation.
+- `[tasks.run] multiple` controls selected-task execution for `tasks run --multiple`. When unset, the built-in default is `"sequential"`.
+- `multiple = "parallel"` is the opt-in contract for parallel task worktree orchestration. The CLI and daemon carry the effective `multiple_mode` and ordered `selected_tasks` as first-class run inputs.
 - `max_retries` applies to execution-stage ACP failures and inactivity timeouts for `compozy exec`, `compozy tasks run`, and `compozy reviews fix`.
 - Built-in CLI defaults retry timed-out or transient ACP failures twice; set `max_retries = 0` or pass `--max-retries 0` to opt out.
 - `retry_backoff_multiplier` only increases the next attempt timeout; retries restart immediately and do not add a sleep delay.
@@ -628,26 +628,26 @@ When `--recursive` is set, tasks are grouped by directory (root tasks first, the
 
 Use `tasks run --multiple` when you want to start several task workflows from one invocation with the same runtime flags. Use `tasks run <slug>` when you only need one workflow run, when a script expects a single workflow slug, or when you want the existing single-run command path.
 
-The `--multiple` flag takes one comma-separated slug list:
+The `--multiple` flag takes one comma-separated selected-task list for one workflow:
 
 ```bash
-compozy tasks run --multiple alpha,beta --ide codex --model gpt-5.5
-compozy tasks run --multiple alpha,beta --stream
-compozy tasks run --multiple alpha,beta --detach
+compozy tasks run my-feature --multiple task_01,task_02 --ide codex --model gpt-5.5
+compozy tasks run my-feature --multiple task_01,task_02 --stream
+compozy tasks run --name my-feature --multiple task_01,task_02 --detach
 ```
 
 Scheduling is controlled by `.compozy/config.toml` or `~/.compozy/config.toml`:
 
 ```toml
 [tasks.run]
-run_multiple_mode = "enqueued"
+multiple = "sequential"
 ```
 
-`"enqueued"` is the default and runs one child workflow at a time in the requested order. `"parallel"` is also accepted in V1, but Compozy prints a fallback message and still runs the queue as `"enqueued"` until V2 adds git worktree-backed isolation for concurrent agents.
+`"sequential"` is the default and preserves the existing ordered task-run behavior. `"parallel"` opts the selected-task run into parent/child worktree orchestration when that execution lane is available.
 
 In the TUI, every requested slug has a tab. Queued tabs appear before their child run exists, the running tab shows the familiar task-run surface, and completed, failed, or canceled tabs remain available for inspection. The quit dialog applies to the parent queue: `Close TUI` detaches and leaves the queue running in the daemon, `Stop Run` cancels the parent queue, cancels the active child, and marks queued workflows canceled, and `Cancel` returns to the TUI without changing execution.
 
-The multi-run path uses the same attach and runtime flags as single-run `tasks run`, except `--multiple` cannot be combined with a positional slug or `--name`.
+The multi-run path uses the same attach and runtime flags as single-run `tasks run`; provide the workflow with either a positional slug or `--name`, and provide selected task identifiers with `--multiple`.
 
 </details>
 

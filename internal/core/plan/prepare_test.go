@@ -151,6 +151,117 @@ func TestValidateAndFilterEntriesReportsCompletedTaskWorkflowsSeparately(t *test
 	}
 }
 
+func TestValidateAndFilterEntriesFiltersSelectedTasks(t *testing.T) {
+	t.Parallel()
+
+	entries := []model.IssueEntry{
+		{Name: "task_01.md", CodeFile: "task_01", Content: taskContentForTest("pending", "Task 1", "backend")},
+		{
+			Name:     "nested/task_02.md",
+			CodeFile: "nested/task_02",
+			Content:  taskContentForTest("pending", "Task 2", "backend"),
+		},
+		{Name: "task_03.md", CodeFile: "task_03", Content: taskContentForTest("pending", "Task 3", "backend")},
+	}
+
+	filtered, err := validateAndFilterEntries(entries, &model.RuntimeConfig{
+		Mode:          model.ExecutionModePRDTasks,
+		SelectedTasks: []string{"task_01", "nested/task_02.md"},
+	})
+	if err != nil {
+		t.Fatalf("validateAndFilterEntries: %v", err)
+	}
+
+	gotNames := []string{filtered[0].Name, filtered[1].Name}
+	wantNames := []string{"task_01.md", "nested/task_02.md"}
+	if !reflect.DeepEqual(gotNames, wantNames) {
+		t.Fatalf("unexpected selected task entries\nwant: %#v\ngot:  %#v", wantNames, gotNames)
+	}
+}
+
+func TestValidateAndFilterEntriesPreservesSelectedTaskOrder(t *testing.T) {
+	t.Parallel()
+
+	entries := []model.IssueEntry{
+		{Name: "task_01.md", CodeFile: "task_01", Content: taskContentForTest("pending", "Task 1", "backend")},
+		{Name: "task_02.md", CodeFile: "task_02", Content: taskContentForTest("pending", "Task 2", "backend")},
+		{Name: "task_03.md", CodeFile: "task_03", Content: taskContentForTest("pending", "Task 3", "backend")},
+	}
+
+	filtered, err := validateAndFilterEntries(entries, &model.RuntimeConfig{
+		Mode:          model.ExecutionModePRDTasks,
+		SelectedTasks: []string{"task_03", "task_01"},
+	})
+	if err != nil {
+		t.Fatalf("validateAndFilterEntries: %v", err)
+	}
+
+	gotNames := []string{filtered[0].Name, filtered[1].Name}
+	wantNames := []string{"task_03.md", "task_01.md"}
+	if !reflect.DeepEqual(gotNames, wantNames) {
+		t.Fatalf("unexpected selected task order\nwant: %#v\ngot:  %#v", wantNames, gotNames)
+	}
+}
+
+func TestValidateAndFilterEntriesRejectsDuplicateSelectedTaskAliases(t *testing.T) {
+	t.Parallel()
+
+	entries := []model.IssueEntry{{
+		Name:     "task_01.md",
+		CodeFile: "task_01",
+		Content:  taskContentForTest("pending", "Task 1", "backend"),
+	}}
+	_, err := validateAndFilterEntries(entries, &model.RuntimeConfig{
+		Mode:          model.ExecutionModePRDTasks,
+		SelectedTasks: []string{"task_01", "task_01.md"},
+	})
+	if err == nil {
+		t.Fatal("expected duplicate selected task alias error")
+	}
+	if !strings.Contains(err.Error(), "duplicate selected task files") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateAndFilterEntriesRejectsCompletedSelectedTask(t *testing.T) {
+	t.Parallel()
+
+	entries := []model.IssueEntry{{
+		Name:     "task_01.md",
+		CodeFile: "task_01",
+		Content:  taskContentForTest("completed", "Task 1", "backend"),
+	}}
+	_, err := validateAndFilterEntries(entries, &model.RuntimeConfig{
+		Mode:             model.ExecutionModePRDTasks,
+		IncludeCompleted: false,
+		SelectedTasks:    []string{"task_01"},
+	})
+	if err == nil {
+		t.Fatal("expected completed selected task error")
+	}
+	if !strings.Contains(err.Error(), "selected task files already completed: task_01") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateAndFilterEntriesRejectsMissingSelectedTask(t *testing.T) {
+	t.Parallel()
+
+	_, err := validateAndFilterEntries(
+		[]model.IssueEntry{{Name: "task_01.md", CodeFile: "task_01"}},
+		&model.RuntimeConfig{
+			Mode:          model.ExecutionModePRDTasks,
+			SelectedTasks: []string{"task_02"},
+		},
+	)
+	if err == nil {
+		t.Fatal("expected missing selected task error")
+	}
+	if !strings.Contains(err.Error(), "selected task files not found: task_02") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidateAndFilterEntriesKeepsEmptyTaskDirectoriesDistinct(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := tasks.RefreshTaskMeta(dir); err != nil {
@@ -300,6 +411,66 @@ func TestPrepareJobsForPRDTasksForcesSingleBatchPerTask(t *testing.T) {
 		if !strings.Contains(job.SystemPrompt, "<workflow_memory>") {
 			t.Fatalf("expected prd job to include workflow-memory system prompt, got %q", job.SystemPrompt)
 		}
+	}
+}
+
+func TestPrepareJobsPreservesExplicitSelectedTaskOrder(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := t.TempDir()
+	runArtifacts := model.NewRunArtifacts(workspaceRoot, "tasks-selected-order-test-run")
+	if err := os.MkdirAll(runArtifacts.JobsDir, 0o755); err != nil {
+		t.Fatalf("mkdir jobs dir: %v", err)
+	}
+	tasksDir := t.TempDir()
+	groups := map[string][]model.IssueEntry{
+		"task_01": {{
+			Name:     "task_01.md",
+			AbsPath:  filepath.Join(tasksDir, "task_01.md"),
+			Content:  taskContentForTest("pending", "First task", "backend"),
+			CodeFile: "task_01",
+		}},
+		"task_02": {{
+			Name:     "task_02.md",
+			AbsPath:  filepath.Join(tasksDir, "task_02.md"),
+			Content:  taskContentForTest("pending", "Second task", "backend"),
+			CodeFile: "task_02",
+		}},
+		"task_03": {{
+			Name:     "task_03.md",
+			AbsPath:  filepath.Join(tasksDir, "task_03.md"),
+			Content:  taskContentForTest("pending", "Third task", "backend"),
+			CodeFile: "task_03",
+		}},
+	}
+
+	jobs, err := prepareJobs(context.Background(), &model.RuntimeConfig{
+		Name:          "demo",
+		WorkspaceRoot: workspaceRoot,
+		TasksDir:      tasksDir,
+		IDE:           model.IDECodex,
+		Model:         "default-model",
+		Mode:          model.ExecutionModePRDTasks,
+		SelectedTasks: []string{"task_03", "task_01"},
+		TaskRuntimeRules: []model.TaskRuntimeRule{{
+			ID:    testStringPointer("task_03"),
+			Model: testStringPointer("selected-task-model"),
+		}},
+	}, groups, runArtifacts, nil, nil)
+	if err != nil {
+		t.Fatalf("prepareJobs: %v", err)
+	}
+	gotCodeFiles := []string{jobs[0].CodeFiles[0], jobs[1].CodeFiles[0]}
+	wantCodeFiles := []string{"task_03", "task_01"}
+	if !reflect.DeepEqual(gotCodeFiles, wantCodeFiles) {
+		t.Fatalf("unexpected job order\nwant: %#v\ngot:  %#v", wantCodeFiles, gotCodeFiles)
+	}
+	if !strings.Contains(string(jobs[0].Prompt), "Third task") ||
+		!strings.Contains(string(jobs[1].Prompt), "First task") {
+		t.Fatalf("expected prompt preparation to follow selected order")
+	}
+	if jobs[0].Model != "selected-task-model" || jobs[1].Model != "default-model" {
+		t.Fatalf("task runtime rules did not match selected task identifiers: %#v", jobs)
 	}
 }
 
@@ -1927,6 +2098,16 @@ func writeRecursiveTaskFixture(t *testing.T, tasksDir string) {
 			t.Fatalf("write %s: %v", path, err)
 		}
 	}
+}
+
+func taskContentForTest(status, title, taskType string) string {
+	return fmt.Sprintf(
+		"---\nstatus: %s\ntitle: %s\ntype: %s\ncomplexity: low\n---\n\n# %s\n",
+		status,
+		title,
+		taskType,
+		title,
+	)
 }
 
 func TestReadIssueEntriesBranchesOnRecursive(t *testing.T) {

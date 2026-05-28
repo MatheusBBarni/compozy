@@ -120,6 +120,29 @@ func TestRuntimeConfigApplyDefaults(t *testing.T) {
 	})
 }
 
+func TestRuntimeConfigClonePreservesMultipleTaskInputs(t *testing.T) {
+	t.Parallel()
+
+	cfg := &model.RuntimeConfig{
+		MultipleMode:  "parallel",
+		SelectedTasks: []string{"task_01", "task_02"},
+	}
+	cloned := cfg.Clone()
+	if cloned == nil {
+		t.Fatal("Clone() returned nil")
+	}
+	if cloned.MultipleMode != cfg.MultipleMode {
+		t.Fatalf("MultipleMode = %q, want %q", cloned.MultipleMode, cfg.MultipleMode)
+	}
+	if !reflect.DeepEqual(cloned.SelectedTasks, cfg.SelectedTasks) {
+		t.Fatalf("SelectedTasks = %#v, want %#v", cloned.SelectedTasks, cfg.SelectedTasks)
+	}
+	cloned.SelectedTasks[0] = "task_99"
+	if cfg.SelectedTasks[0] != "task_01" {
+		t.Fatalf("Clone() shared SelectedTasks backing array: %#v", cfg.SelectedTasks)
+	}
+}
+
 func TestPathHelpers(t *testing.T) {
 	t.Parallel()
 

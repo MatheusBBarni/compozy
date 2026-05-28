@@ -159,10 +159,16 @@ func (c *Client) StartTaskRun(
 		return apicore.Run{}, ErrWorkflowSlugRequired
 	}
 
+	selectedTasks, err := normalizeOptionalClientSelectedTasks(req.SelectedTasks)
+	if err != nil {
+		return apicore.Run{}, err
+	}
 	body := contract.TaskRunRequest{
 		Workspace:        strings.TrimSpace(req.Workspace),
 		PresentationMode: strings.TrimSpace(req.PresentationMode),
 		RuntimeOverrides: req.RuntimeOverrides,
+		MultipleMode:     strings.TrimSpace(req.MultipleMode),
+		SelectedTasks:    selectedTasks,
 	}
 
 	var response contract.RunResponse
@@ -181,15 +187,29 @@ func (c *Client) StartTaskRunMultiple(
 	if c == nil {
 		return apicore.Run{}, ErrDaemonClientRequired
 	}
-	slugs, err := normalizeClientSlugs(req.Slugs)
+	selectedTasks, err := normalizeOptionalClientSelectedTasks(req.SelectedTasks)
 	if err != nil {
 		return apicore.Run{}, err
+	}
+	legacySlugs, err := normalizeOptionalClientSelectedTasks(req.Slugs)
+	if err != nil {
+		return apicore.Run{}, err
+	}
+	if len(selectedTasks) == 0 && len(legacySlugs) == 0 {
+		return apicore.Run{}, ErrWorkflowSlugRequired
+	}
+	multipleMode := strings.TrimSpace(req.MultipleMode)
+	if multipleMode == "" {
+		multipleMode = strings.TrimSpace(req.Mode)
 	}
 
 	body := contract.TaskRunMultipleRequest{
 		Workspace:        strings.TrimSpace(req.Workspace),
-		Slugs:            slugs,
-		Mode:             strings.TrimSpace(req.Mode),
+		WorkflowSlug:     strings.TrimSpace(req.WorkflowSlug),
+		Slugs:            legacySlugs,
+		Mode:             multipleMode,
+		MultipleMode:     multipleMode,
+		SelectedTasks:    selectedTasks,
 		PresentationMode: strings.TrimSpace(req.PresentationMode),
 		RuntimeOverrides: req.RuntimeOverrides,
 	}
@@ -201,19 +221,31 @@ func (c *Client) StartTaskRunMultiple(
 	return response.Run, nil
 }
 
-func normalizeClientSlugs(values []string) ([]string, error) {
+func normalizeClientSelectedTasks(values []string) ([]string, error) {
 	if len(values) == 0 {
 		return nil, ErrWorkflowSlugRequired
 	}
-	slugs := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	selectedTasks := make([]string, 0, len(values))
 	for _, value := range values {
-		slug := strings.TrimSpace(value)
-		if slug == "" {
+		selectedTask := strings.TrimSpace(value)
+		if selectedTask == "" {
 			return nil, ErrWorkflowSlugRequired
 		}
-		slugs = append(slugs, slug)
+		if _, ok := seen[selectedTask]; ok {
+			return nil, ErrWorkflowSlugRequired
+		}
+		seen[selectedTask] = struct{}{}
+		selectedTasks = append(selectedTasks, selectedTask)
 	}
-	return slugs, nil
+	return selectedTasks, nil
+}
+
+func normalizeOptionalClientSelectedTasks(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	return normalizeClientSelectedTasks(values)
 }
 
 func (c *Client) doJSON(

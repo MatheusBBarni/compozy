@@ -7,8 +7,12 @@ import (
 )
 
 const (
+	TaskRunMultipleModeSequential = "sequential"
+	TaskRunMultipleModeParallel   = "parallel"
+
+	// TaskRunMultipleModeEnqueued is retained for legacy cross-workflow queues.
+	// New task-scoped config must use TaskRunMultipleModeSequential.
 	TaskRunMultipleModeEnqueued = "enqueued"
-	TaskRunMultipleModeParallel = "parallel"
 )
 
 type Context struct {
@@ -51,20 +55,32 @@ type TaskRunConfig struct {
 	IncludeCompleted *bool                    `toml:"include_completed"`
 	Recursive        *bool                    `toml:"recursive"`
 	OutputFormat     *string                  `toml:"output_format"`
+	Multiple         *string                  `toml:"multiple"`
 	RunMultipleMode  *string                  `toml:"run_multiple_mode"`
 	TUI              *bool                    `toml:"tui"`
 	TaskRuntimeRules *[]model.TaskRuntimeRule `toml:"task_runtime_rules"`
 }
 
-func (cfg TaskRunConfig) EffectiveRunMultipleMode() string {
-	if cfg.RunMultipleMode == nil {
-		return TaskRunMultipleModeEnqueued
+func (cfg TaskRunConfig) EffectiveMultipleMode() string {
+	if cfg.Multiple == nil && cfg.RunMultipleMode != nil {
+		mode := strings.TrimSpace(*cfg.RunMultipleMode)
+		if mode == "" {
+			return TaskRunMultipleModeSequential
+		}
+		return mode
 	}
-	mode := strings.TrimSpace(*cfg.RunMultipleMode)
+	if cfg.Multiple == nil {
+		return TaskRunMultipleModeSequential
+	}
+	mode := strings.TrimSpace(*cfg.Multiple)
 	if mode == "" {
-		return TaskRunMultipleModeEnqueued
+		return TaskRunMultipleModeSequential
 	}
 	return mode
+}
+
+func (cfg TaskRunConfig) EffectiveRunMultipleMode() string {
+	return cfg.EffectiveMultipleMode()
 }
 
 type TasksConfig struct {

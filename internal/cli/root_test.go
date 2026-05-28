@@ -468,11 +468,11 @@ func TestTasksRunHelpShowsMultipleExamplesAndSharedTaskFlags(t *testing.T) {
 		}
 
 		required := []string{
-			"compozy tasks run --multiple alpha,beta --stream",
-			"compozy tasks run --multiple alpha,beta --detach",
-			"compozy tasks run --multiple alpha,beta --ide codex --model gpt-5.5",
-			"one comma-separated slug list",
-			"configured parallel mode prints a V2 worktree-isolation",
+			"compozy tasks run my-feature --multiple task_01,task_02 --stream",
+			"compozy tasks run --name my-feature --multiple task_01,task_02 --detach",
+			"compozy tasks run my-feature --multiple task_01,task_02 --ide codex --model gpt-5.5",
+			"one comma-separated task list",
+			"multiple = \"parallel\"",
 			"--multiple",
 			"--attach",
 			"--detach",

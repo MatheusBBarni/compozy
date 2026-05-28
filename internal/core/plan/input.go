@@ -180,6 +180,13 @@ func missingRequiredInputsError(mode model.ExecutionMode) error {
 }
 
 func validateAndFilterEntries(entries []model.IssueEntry, cfg *model.RuntimeConfig) ([]model.IssueEntry, error) {
+	if cfg.Mode == model.ExecutionModePRDTasks && len(cfg.SelectedTasks) > 0 {
+		var err error
+		entries, err = tasks.SelectTaskEntries(entries, cfg.SelectedTasks, cfg.IncludeCompleted)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if len(entries) == 0 {
 		if cfg.Mode == model.ExecutionModePRDTasks {
 			if !cfg.IncludeCompleted && strings.TrimSpace(cfg.TasksDir) != "" {

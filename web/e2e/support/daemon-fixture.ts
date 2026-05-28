@@ -36,7 +36,8 @@ export function resolvePlaywrightPaths(): PlaywrightPaths {
   const supportDir = path.dirname(fileURLToPath(import.meta.url));
   const webRoot = path.resolve(supportDir, "..", "..");
   const repoRoot = path.resolve(webRoot, "..");
-  const sharedTmpDir = path.join(repoRoot, ".tmp", "playwright");
+  const sharedTmpDir =
+    process.env.COMPOZY_PLAYWRIGHT_TMP_DIR ?? path.join("/tmp", `cz-pw-${process.pid}`);
 
   return {
     supportDir,

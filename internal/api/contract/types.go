@@ -40,21 +40,27 @@ type TaskRunRequest struct {
 	Workspace        string          `json:"workspace"`
 	PresentationMode string          `json:"presentation_mode,omitempty"`
 	RuntimeOverrides json.RawMessage `json:"runtime_overrides,omitempty"`
+	MultipleMode     string          `json:"multiple_mode,omitempty"`
+	SelectedTasks    []string        `json:"selected_tasks,omitempty"`
 }
 
 type TaskRunMultipleRequest struct {
 	Workspace        string          `json:"workspace"`
-	Slugs            []string        `json:"slugs"`
+	WorkflowSlug     string          `json:"workflow_slug,omitempty"`
+	Slugs            []string        `json:"slugs,omitempty"`
 	Mode             string          `json:"mode,omitempty"`
+	MultipleMode     string          `json:"multiple_mode,omitempty"`
+	SelectedTasks    []string        `json:"selected_tasks,omitempty"`
 	PresentationMode string          `json:"presentation_mode,omitempty"`
 	RuntimeOverrides json.RawMessage `json:"runtime_overrides,omitempty"`
 }
 
 type TaskRunMultipleItem struct {
-	Slug      string `json:"slug"`
-	Status    string `json:"status"`
-	RunID     string `json:"run_id,omitempty"`
-	ErrorText string `json:"error_text,omitempty"`
+	Slug         string `json:"slug"`
+	SelectedTask string `json:"selected_task,omitempty"`
+	Status       string `json:"status"`
+	RunID        string `json:"run_id,omitempty"`
+	ErrorText    string `json:"error_text,omitempty"`
 }
 
 type TaskRunMultipleSnapshot struct {

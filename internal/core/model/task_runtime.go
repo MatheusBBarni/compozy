@@ -92,6 +92,7 @@ func (cfg *RuntimeConfig) Clone() *RuntimeConfig {
 	}
 	cloned := *cfg
 	cloned.AddDirs = append([]string(nil), cfg.AddDirs...)
+	cloned.SelectedTasks = append([]string(nil), cfg.SelectedTasks...)
 	cloned.TaskRuntimeRules = CloneTaskRuntimeRules(cfg.TaskRuntimeRules)
 	return &cloned
 }

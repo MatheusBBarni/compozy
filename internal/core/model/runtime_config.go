@@ -51,6 +51,8 @@ type RuntimeConfig struct {
 	ResolvedPromptText         string
 	IncludeCompleted           bool
 	Recursive                  bool
+	MultipleMode               string
+	SelectedTasks              []string
 	IncludeResolved            bool
 	Timeout                    time.Duration
 	MaxRetries                 int

@@ -91,10 +91,17 @@ func validateTaskRun(scope string, defaults DefaultsConfig, cfg TaskRunConfig) e
 		return err
 	}
 	if err := validateTaskRunMultipleMode(
-		configFieldName(scope, "tasks.run.run_multiple_mode"),
-		cfg.RunMultipleMode,
+		configFieldName(scope, "tasks.run.multiple"),
+		cfg.Multiple,
 	); err != nil {
 		return err
+	}
+	if cfg.RunMultipleMode != nil {
+		return fmt.Errorf(
+			"%s has been replaced by %s",
+			configFieldName(scope, "tasks.run.run_multiple_mode"),
+			configFieldName(scope, "tasks.run.multiple"),
+		)
 	}
 	return validateTaskRunRuntimeRules(scope, cfg.TaskRuntimeRules)
 }
@@ -332,13 +339,13 @@ func validateTaskRunMultipleMode(field string, value *string) error {
 	switch strings.TrimSpace(*value) {
 	case "":
 		return fmt.Errorf("%s cannot be empty", field)
-	case TaskRunMultipleModeEnqueued, TaskRunMultipleModeParallel:
+	case TaskRunMultipleModeSequential, TaskRunMultipleModeParallel:
 		return nil
 	default:
 		return fmt.Errorf(
 			"%s must be %q or %q (got %q)",
 			field,
-			TaskRunMultipleModeEnqueued,
+			TaskRunMultipleModeSequential,
 			TaskRunMultipleModeParallel,
 			strings.TrimSpace(*value),
 		)

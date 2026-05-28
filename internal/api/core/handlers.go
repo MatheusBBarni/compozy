@@ -268,36 +268,39 @@ func requireNonEmptyString(field string, value string) error {
 	return nil
 }
 
-func normalizeRequiredSlugs(values []string) ([]string, error) {
+func normalizeSelectedTasks(values []string, required bool) ([]string, error) {
 	if len(values) == 0 {
+		if !required {
+			return nil, nil
+		}
 		return nil, validationProblem(
-			"slugs_required",
-			"slugs is required",
-			map[string]any{"field": "slugs"},
+			"selected_tasks_required",
+			"selected tasks is required",
+			map[string]any{"field": "selected_tasks"},
 		)
 	}
 	seen := make(map[string]struct{}, len(values))
-	slugs := make([]string, 0, len(values))
+	selectedTasks := make([]string, 0, len(values))
 	for idx, raw := range values {
-		slug := strings.TrimSpace(raw)
-		if slug == "" {
+		selectedTask := strings.TrimSpace(raw)
+		if selectedTask == "" {
 			return nil, validationProblem(
-				"slug_required",
-				"slugs must not contain empty entries",
-				map[string]any{"field": "slugs", "index": idx},
+				"selected_task_required",
+				"selected_tasks must not contain empty entries",
+				map[string]any{"field": "selected_tasks", "index": idx},
 			)
 		}
-		if _, ok := seen[slug]; ok {
+		if _, ok := seen[selectedTask]; ok {
 			return nil, validationProblem(
-				"slug_duplicate",
-				fmt.Sprintf("duplicate slug %q", slug),
-				map[string]any{"field": "slugs", "slug": slug},
+				"selected_task_duplicate",
+				fmt.Sprintf("duplicate selected task %q", selectedTask),
+				map[string]any{"field": "selected_tasks", "selected_task": selectedTask},
 			)
 		}
-		seen[slug] = struct{}{}
-		slugs = append(slugs, slug)
+		seen[selectedTask] = struct{}{}
+		selectedTasks = append(selectedTasks, selectedTask)
 	}
-	return slugs, nil
+	return selectedTasks, nil
 }
 
 func parsePositiveInt(value string, field string) (int, error) {
@@ -832,11 +835,18 @@ func (h *Handlers) StartTaskRun(c *gin.Context) {
 	if !ok {
 		return
 	}
+	selectedTasks, err := normalizeSelectedTasks(body.SelectedTasks, false)
+	if err != nil {
+		h.respondError(c, err)
+		return
+	}
 
 	run, err := h.Tasks.StartRun(c.Request.Context(), workspace, c.Param("slug"), TaskRunRequest{
 		Workspace:        workspace,
 		PresentationMode: strings.TrimSpace(body.PresentationMode),
 		RuntimeOverrides: body.RuntimeOverrides,
+		MultipleMode:     strings.TrimSpace(body.MultipleMode),
+		SelectedTasks:    selectedTasks,
 	})
 	if err != nil {
 		h.respondWorkspaceContextError(c, workspace, err)
@@ -860,16 +870,44 @@ func (h *Handlers) StartTaskRunMultiple(c *gin.Context) {
 	if !ok {
 		return
 	}
-	slugs, err := normalizeRequiredSlugs(body.Slugs)
+	workflowSlug := strings.TrimSpace(body.WorkflowSlug)
+	selectedTasks, err := normalizeSelectedTasks(body.SelectedTasks, false)
 	if err != nil {
 		h.respondError(c, err)
 		return
 	}
+	legacySlugs, err := normalizeSelectedTasks(body.Slugs, false)
+	if err != nil {
+		h.respondError(c, err)
+		return
+	}
+	if len(selectedTasks) == 0 && len(legacySlugs) == 0 {
+		h.respondError(c, validationProblem(
+			"selected_tasks_required",
+			"selected_tasks is required",
+			map[string]any{"field": "selected_tasks"},
+		))
+		return
+	}
+	if len(selectedTasks) > 0 && workflowSlug == "" {
+		h.respondError(c, validationProblem(
+			"workflow_slug_required",
+			"workflow_slug is required when selected_tasks is provided",
+			map[string]any{"field": "workflow_slug"},
+		))
+		return
+	}
+	multipleMode := strings.TrimSpace(body.MultipleMode)
+	if multipleMode == "" {
+		multipleMode = strings.TrimSpace(body.Mode)
+	}
 
 	run, err := h.Tasks.StartRunMultiple(c.Request.Context(), workspace, TaskRunMultipleRequest{
 		Workspace:        workspace,
-		Slugs:            slugs,
-		Mode:             strings.TrimSpace(body.Mode),
+		WorkflowSlug:     workflowSlug,
+		Slugs:            legacySlugs,
+		MultipleMode:     multipleMode,
+		SelectedTasks:    selectedTasks,
 		PresentationMode: strings.TrimSpace(body.PresentationMode),
 		RuntimeOverrides: body.RuntimeOverrides,
 	})

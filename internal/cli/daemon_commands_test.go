@@ -1027,16 +1027,10 @@ func decodeTaskRunOverrides(t *testing.T, raw json.RawMessage) daemonRuntimeOver
 	return payload
 }
 
-type failingCLIWriter struct{}
-
-func (failingCLIWriter) Write([]byte) (int, error) {
-	return 0, errors.New("write failed")
-}
-
 func TestResolveTaskRunMultipleMode(t *testing.T) {
 	t.Parallel()
 
-	t.Run("Should default to enqueued", func(t *testing.T) {
+	t.Run("Should default to sequential", func(t *testing.T) {
 		t.Parallel()
 
 		state := newCommandState(commandKindTasksRun, core.ModePRDTasks)
@@ -1045,28 +1039,23 @@ func TestResolveTaskRunMultipleMode(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveTaskRunMultipleMode() error = %v", err)
 		}
-		if mode != "enqueued" {
-			t.Fatalf("mode = %q, want enqueued", mode)
+		if mode != "sequential" {
+			t.Fatalf("mode = %q, want sequential", mode)
 		}
 	})
 
-	t.Run("Should fallback to enqueued with warning", func(t *testing.T) {
+	t.Run("Should preserve parallel mode", func(t *testing.T) {
 		t.Parallel()
 
 		state := newCommandState(commandKindTasksRun, core.ModePRDTasks)
-		state.projectConfig.Tasks.Run.RunMultipleMode = stringPointer("parallel")
+		state.projectConfig.Tasks.Run.Multiple = stringPointer("parallel")
 		cmd := &cobra.Command{}
-		var stderr bytes.Buffer
-		cmd.SetErr(&stderr)
 		mode, err := state.resolveTaskRunMultipleMode(cmd)
 		if err != nil {
 			t.Fatalf("resolveTaskRunMultipleMode() error = %v", err)
 		}
-		if mode != "enqueued" {
-			t.Fatalf("mode = %q, want enqueued", mode)
-		}
-		if !containsAll(stderr.String(), "V2", "worktree isolation", "enqueued") {
-			t.Fatalf("fallback stderr = %q", stderr.String())
+		if mode != "parallel" {
+			t.Fatalf("mode = %q, want parallel", mode)
 		}
 	})
 
@@ -1074,23 +1063,10 @@ func TestResolveTaskRunMultipleMode(t *testing.T) {
 		t.Parallel()
 
 		state := newCommandState(commandKindTasksRun, core.ModePRDTasks)
-		state.projectConfig.Tasks.Run.RunMultipleMode = stringPointer("bogus")
+		state.projectConfig.Tasks.Run.Multiple = stringPointer("bogus")
 		_, err := state.resolveTaskRunMultipleMode(&cobra.Command{})
-		if err == nil || !strings.Contains(err.Error(), "tasks.run.run_multiple_mode") {
+		if err == nil || !strings.Contains(err.Error(), "tasks.run.multiple") {
 			t.Fatalf("expected invalid mode error, got %v", err)
-		}
-	})
-
-	t.Run("Should surface write failure when fallback message cannot be written", func(t *testing.T) {
-		t.Parallel()
-
-		state := newCommandState(commandKindTasksRun, core.ModePRDTasks)
-		state.projectConfig.Tasks.Run.RunMultipleMode = stringPointer("parallel")
-		cmd := &cobra.Command{}
-		cmd.SetErr(failingCLIWriter{})
-		_, err := state.resolveTaskRunMultipleMode(cmd)
-		if err == nil || !strings.Contains(err.Error(), "write multi-run fallback message") {
-			t.Fatalf("expected fallback write error, got %v", err)
 		}
 	})
 }

@@ -1,4 +1,4 @@
-import { appendFile, cp, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, cp, mkdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
@@ -39,9 +39,10 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
   await mkdir(paths.sharedTmpDir, { recursive: true });
   await assertBinaryExists(paths.binaryPath);
 
-  const fixtureRoot = path.join(paths.sharedTmpDir, "workspace");
+  const fixtureRootPath = path.join(paths.sharedTmpDir, "workspace");
   const homeDir = path.join(paths.sharedTmpDir, "home");
-  await createWorkspaceFixture(paths.repoRoot, fixtureRoot);
+  await createWorkspaceFixture(paths.repoRoot, fixtureRootPath);
+  const fixtureRoot = await realpath(fixtureRootPath);
   await mkdir(homeDir, { recursive: true });
 
   const env = daemonEnvironment(homeDir);

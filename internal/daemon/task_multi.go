@@ -38,6 +38,8 @@ type preparedTaskMulti struct {
 
 type preparedTaskMultiItem struct {
 	slug         string
+	selectedTask string
+	workflowSlug string
 	workflowID   *string
 	workflowRoot string
 	runtimeCfg   *model.RuntimeConfig
@@ -54,11 +56,19 @@ func (m *RunManager) StartTaskRunMultiple(
 	workspaceRef string,
 	req apicore.TaskRunMultipleRequest,
 ) (apicore.Run, error) {
-	slugs, err := normalizeTaskMultiSlugs(req.Slugs)
+	selectedTasks := req.SelectedTasks
+	if len(selectedTasks) == 0 {
+		selectedTasks = req.Slugs
+	}
+	selectedTasks, err := normalizeTaskMultiSlugs(selectedTasks)
 	if err != nil {
 		return apicore.Run{}, err
 	}
-	mode, err := resolveTaskMultiMode(req.Mode)
+	modeText := req.MultipleMode
+	if strings.TrimSpace(modeText) == "" {
+		modeText = req.Mode
+	}
+	mode, err := resolveTaskMultiMode(modeText)
 	if err != nil {
 		return apicore.Run{}, err
 	}
@@ -66,11 +76,16 @@ func (m *RunManager) StartTaskRunMultiple(
 	if err != nil {
 		return apicore.Run{}, err
 	}
-	prepared, err := m.prepareTaskMultiStart(detachContext(ctx), workspaceRef, slugs, mode, req, childOverrides)
+	prepared, err := m.prepareTaskMultiStart(detachContext(ctx), workspaceRef, selectedTasks, mode, req, childOverrides)
 	if err != nil {
 		return apicore.Run{}, err
 	}
-	runtimeCfg, err := taskMultiParentRuntimeConfig(req.RuntimeOverrides, prepared.workspace.RootDir)
+	runtimeCfg, err := taskMultiParentRuntimeConfig(
+		req.RuntimeOverrides,
+		prepared.workspace.RootDir,
+		mode,
+		selectedTasks,
+	)
 	if err != nil {
 		return apicore.Run{}, err
 	}
@@ -130,23 +145,37 @@ func (m *RunManager) RunMultipleSnapshot(ctx context.Context, runID string) (api
 func (m *RunManager) prepareTaskMultiStart(
 	ctx context.Context,
 	workspaceRef string,
-	slugs []string,
+	selectedTasks []string,
 	mode string,
 	req apicore.TaskRunMultipleRequest,
 	childOverrides json.RawMessage,
 ) (*preparedTaskMulti, error) {
-	items := make([]preparedTaskMultiItem, 0, len(slugs))
+	items := make([]preparedTaskMultiItem, 0, len(selectedTasks))
 	var workspaceRow globaldb.Workspace
 	var presentationMode string
-	for idx, slug := range slugs {
+	workflowSlug := strings.TrimSpace(req.WorkflowSlug)
+	for idx, selectedTask := range selectedTasks {
+		slug := strings.TrimSpace(selectedTask)
+		childWorkflowSlug := slug
+		itemSelectedTask := ""
+		if workflowSlug != "" {
+			childWorkflowSlug = workflowSlug
+			itemSelectedTask = strings.TrimSpace(selectedTask)
+		}
+		var childSelectedTasks []string
+		if itemSelectedTask != "" {
+			childSelectedTasks = []string{itemSelectedTask}
+		}
 		row, workflowID, runtimeCfg, childPresentationMode, err := m.prepareTaskStart(
 			ctx,
 			workspaceRef,
-			slug,
+			childWorkflowSlug,
 			apicore.TaskRunRequest{
 				Workspace:        req.Workspace,
 				PresentationMode: req.PresentationMode,
 				RuntimeOverrides: childOverrides,
+				MultipleMode:     mode,
+				SelectedTasks:    childSelectedTasks,
 			},
 		)
 		if err != nil {
@@ -158,6 +187,8 @@ func (m *RunManager) prepareTaskMultiStart(
 		}
 		items = append(items, preparedTaskMultiItem{
 			slug:         strings.TrimSpace(slug),
+			selectedTask: itemSelectedTask,
+			workflowSlug: strings.TrimSpace(childWorkflowSlug),
 			workflowID:   cloneStringPtr(workflowID),
 			workflowRoot: strings.TrimSpace(runtimeCfg.TasksDir),
 			runtimeCfg:   runtimeCfg,
@@ -181,7 +212,12 @@ func (m *RunManager) prepareTaskMultiStart(
 	}, nil
 }
 
-func taskMultiParentRuntimeConfig(raw json.RawMessage, workspaceRoot string) (*model.RuntimeConfig, error) {
+func taskMultiParentRuntimeConfig(
+	raw json.RawMessage,
+	workspaceRoot string,
+	multipleMode string,
+	selectedTasks []string,
+) (*model.RuntimeConfig, error) {
 	overrides, err := parseRuntimeOverrides(raw)
 	if err != nil {
 		return nil, err
@@ -195,6 +231,8 @@ func taskMultiParentRuntimeConfig(raw json.RawMessage, workspaceRoot string) (*m
 	if overrides.RunID != nil {
 		runtimeCfg.RunID = strings.TrimSpace(*overrides.RunID)
 	}
+	runtimeCfg.MultipleMode = strings.TrimSpace(multipleMode)
+	runtimeCfg.SelectedTasks = append([]string(nil), selectedTasks...)
 	runtimeCfg.ApplyDefaults()
 	runtimeCfg.TUI = false
 	runtimeCfg.EnableExecutableExtensions = false
@@ -245,19 +283,17 @@ func normalizeTaskMultiSlugs(values []string) ([]string, error) {
 
 func resolveTaskMultiMode(raw string) (string, error) {
 	switch strings.TrimSpace(raw) {
-	case "", workspacecfg.TaskRunMultipleModeEnqueued:
+	case "", workspacecfg.TaskRunMultipleModeSequential:
+		return workspacecfg.TaskRunMultipleModeSequential, nil
+	case workspacecfg.TaskRunMultipleModeEnqueued:
 		return workspacecfg.TaskRunMultipleModeEnqueued, nil
 	case workspacecfg.TaskRunMultipleModeParallel:
-		return "", taskMultiValidationProblem(
-			"unsupported_run_multiple_mode",
-			"parallel run_multiple mode is not supported by the daemon; use enqueued",
-			"mode",
-		)
+		return workspacecfg.TaskRunMultipleModeParallel, nil
 	default:
 		return "", taskMultiValidationProblem(
 			"invalid_run_multiple_mode",
-			"run_multiple mode must be enqueued",
-			"mode",
+			"multiple mode must be sequential or parallel",
+			"multiple_mode",
 		)
 	}
 }
@@ -437,7 +473,7 @@ func (m *RunManager) startTaskMultiChild(
 	childRun, err := m.startRun(active.ctx, startRunSpec{
 		workspace:        prepared.workspace,
 		workflowID:       cloneStringPtr(item.workflowID),
-		workflowSlug:     item.slug,
+		workflowSlug:     item.workflowSlug,
 		workflowRoot:     item.workflowRoot,
 		mode:             runModeTask,
 		presentationMode: prepared.presentationMode,
@@ -576,12 +612,13 @@ func (m *RunManager) emitTaskMultiItemEvent(
 	errorText string,
 ) error {
 	return m.emitTaskMultiEvent(active, kind, kinds.TaskRunMultiplePayload{
-		Slug:       item.slug,
-		Index:      index,
-		Total:      total,
-		Status:     status,
-		ChildRunID: strings.TrimSpace(childRunID),
-		Error:      strings.TrimSpace(errorText),
+		Slug:         item.slug,
+		SelectedTask: strings.TrimSpace(item.selectedTask),
+		Index:        index,
+		Total:        total,
+		Status:       status,
+		ChildRunID:   strings.TrimSpace(childRunID),
+		Error:        strings.TrimSpace(errorText),
 	})
 }
 
@@ -649,7 +686,9 @@ func (b *taskMultiSnapshotBuilder) applyEvent(event eventspkg.Event) error {
 		if err != nil {
 			return err
 		}
-		item := b.ensureItem(payload.Slug)
+		item := b.ensureItem(payloadItemKey(payload))
+		item.Slug = strings.TrimSpace(payload.Slug)
+		item.SelectedTask = strings.TrimSpace(payload.SelectedTask)
 		item.Status = strings.TrimSpace(payload.Status)
 		if childRunID := strings.TrimSpace(payload.ChildRunID); childRunID != "" {
 			item.RunID = childRunID
@@ -667,6 +706,13 @@ func decodeTaskMultiPayload(event eventspkg.Event) (kinds.TaskRunMultiplePayload
 		return kinds.TaskRunMultiplePayload{}, fmt.Errorf("daemon: decode %s payload: %w", event.Kind, err)
 	}
 	return payload, nil
+}
+
+func payloadItemKey(payload kinds.TaskRunMultiplePayload) string {
+	if selectedTask := strings.TrimSpace(payload.SelectedTask); selectedTask != "" {
+		return selectedTask
+	}
+	return strings.TrimSpace(payload.Slug)
 }
 
 func (b *taskMultiSnapshotBuilder) ensureItem(slug string) *apicore.TaskRunMultipleItem {

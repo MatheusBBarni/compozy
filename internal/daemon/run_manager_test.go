@@ -133,6 +133,73 @@ func TestRunManagerIncludeCompletedStartsCompletedTaskWorkflow(t *testing.T) {
 	})
 }
 
+func TestRunManagerRejectsInvalidSelectedTasksBeforeCreatingRun(t *testing.T) {
+	t.Run("Should reject missing and completed selected tasks", func(t *testing.T) {
+		env := newRunManagerTestEnv(t, runManagerTestDeps{})
+		env.writeWorkflowFile(t, env.workflowSlug, "task_01.md", daemonTaskBody("pending", "Pending task"))
+		env.writeWorkflowFile(t, env.workflowSlug, "task_02.md", daemonTaskBody("completed", "Done task"))
+
+		cases := []struct {
+			name          string
+			runID         string
+			selectedTasks []string
+			want          string
+		}{
+			{
+				name:          "missing",
+				runID:         "task-run-missing-selection",
+				selectedTasks: []string{"task_03"},
+				want:          "selected task files not found: task_03",
+			},
+			{
+				name:          "completed",
+				runID:         "task-run-completed-selection",
+				selectedTasks: []string{"task_02"},
+				want:          "selected task files already completed: task_02",
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := env.manager.StartTaskRun(
+					context.Background(),
+					env.workspaceRoot,
+					env.workflowSlug,
+					apicore.TaskRunRequest{
+						Workspace:        env.workspaceRoot,
+						PresentationMode: defaultPresentationMode,
+						RuntimeOverrides: rawJSON(t, `{"run_id":"`+tc.runID+`","dry_run":true}`),
+						MultipleMode:     workspacecfg.TaskRunMultipleModeSequential,
+						SelectedTasks:    tc.selectedTasks,
+					},
+				)
+				var problem *apicore.Problem
+				if !errors.As(err, &problem) {
+					t.Fatalf("StartTaskRun(%s) error = %v, want problem", tc.name, err)
+				}
+				if problem.Status != http.StatusUnprocessableEntity || problem.Code != "invalid_selected_tasks" {
+					t.Fatalf(
+						"problem = status:%d code:%q, want 422 invalid_selected_tasks",
+						problem.Status,
+						problem.Code,
+					)
+				}
+				if !strings.Contains(problem.Message, tc.want) {
+					t.Fatalf("problem message = %q, want %q", problem.Message, tc.want)
+				}
+				if _, err := env.globalDB.GetRun(
+					context.Background(),
+					tc.runID,
+				); !errors.Is(
+					err,
+					globaldb.ErrRunNotFound,
+				) {
+					t.Fatalf("GetRun(%q) error = %v, want ErrRunNotFound", tc.runID, err)
+				}
+			})
+		}
+	})
+}
+
 func TestRunManagerCancelTaskRunMirrorsTerminalStateAndIsIdempotent(t *testing.T) {
 	started := make(chan string, 1)
 	env := newRunManagerTestEnv(t, runManagerTestDeps{

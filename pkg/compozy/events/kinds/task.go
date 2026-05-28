@@ -44,13 +44,14 @@ type TaskMetadataRefreshedPayload struct {
 
 // TaskRunMultiplePayload describes daemon-owned multi-task queue lifecycle events.
 type TaskRunMultiplePayload struct {
-	RunID      string   `json:"run_id,omitempty"`
-	Mode       string   `json:"mode,omitempty"`
-	Slug       string   `json:"slug,omitempty"`
-	Slugs      []string `json:"slugs,omitempty"`
-	Index      int      `json:"index,omitempty"`
-	Total      int      `json:"total,omitempty"`
-	Status     string   `json:"status,omitempty"`
-	ChildRunID string   `json:"child_run_id,omitempty"`
-	Error      string   `json:"error,omitempty"`
+	RunID        string   `json:"run_id,omitempty"`
+	Mode         string   `json:"mode,omitempty"`
+	Slug         string   `json:"slug,omitempty"`
+	SelectedTask string   `json:"selected_task,omitempty"`
+	Slugs        []string `json:"slugs,omitempty"`
+	Index        int      `json:"index,omitempty"`
+	Total        int      `json:"total,omitempty"`
+	Status       string   `json:"status,omitempty"`
+	ChildRunID   string   `json:"child_run_id,omitempty"`
+	Error        string   `json:"error,omitempty"`
 }

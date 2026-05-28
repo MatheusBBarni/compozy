@@ -791,11 +791,7 @@ func (m *RunManager) prepareTaskStart(
 	if err := applyRuntimeOverrideInput(runtimeCfg, overrides); err != nil {
 		return globaldb.Workspace{}, nil, nil, "", err
 	}
-	if !runtimeCfg.IncludeCompleted {
-		if err := m.rejectCompletedTaskWorkflow(ctx, workflowID, tasksDir, workflowSlug); err != nil {
-			return globaldb.Workspace{}, nil, nil, "", err
-		}
-	}
+	applyTaskRunRequestFields(runtimeCfg, req)
 	runtimeCfg.ApplyDefaults()
 	runtimeCfg.TUI = false
 	runtimeCfg.DaemonOwned = true
@@ -803,7 +799,61 @@ func (m *RunManager) prepareTaskStart(
 	if err := validateDaemonRuntimeConfig(runtimeCfg); err != nil {
 		return globaldb.Workspace{}, nil, nil, "", err
 	}
+	if err := validateSelectedTaskRun(runtimeCfg); err != nil {
+		return globaldb.Workspace{}, nil, nil, "", err
+	}
+	if !runtimeCfg.IncludeCompleted {
+		if err := m.rejectCompletedTaskWorkflow(ctx, workflowID, tasksDir, workflowSlug); err != nil {
+			return globaldb.Workspace{}, nil, nil, "", err
+		}
+	}
 	return workspaceRow, workflowID, runtimeCfg, presentationMode, nil
+}
+
+func applyTaskRunRequestFields(cfg *model.RuntimeConfig, req apicore.TaskRunRequest) {
+	if cfg == nil {
+		return
+	}
+	if multipleMode := strings.TrimSpace(req.MultipleMode); multipleMode != "" {
+		cfg.MultipleMode = multipleMode
+	}
+	if len(req.SelectedTasks) > 0 {
+		cfg.SelectedTasks = append([]string(nil), req.SelectedTasks...)
+	}
+}
+
+func validateSelectedTaskRun(cfg *model.RuntimeConfig) error {
+	if cfg == nil || cfg.Mode != model.ExecutionModePRDTasks || len(cfg.SelectedTasks) == 0 {
+		return nil
+	}
+	var (
+		entries []model.IssueEntry
+		err     error
+	)
+	if cfg.Recursive {
+		entries, err = taskscore.ReadTaskEntriesRecursive(cfg.TasksDir, true)
+	} else {
+		entries, err = taskscore.ReadTaskEntries(cfg.TasksDir, true)
+	}
+	if err != nil {
+		return apicore.NewProblem(
+			http.StatusUnprocessableEntity,
+			"invalid_selected_tasks",
+			fmt.Sprintf("validate selected tasks: %v", err),
+			map[string]any{"field": "selected_tasks"},
+			err,
+		)
+	}
+	if _, err := taskscore.SelectTaskEntries(entries, cfg.SelectedTasks, cfg.IncludeCompleted); err != nil {
+		return apicore.NewProblem(
+			http.StatusUnprocessableEntity,
+			"invalid_selected_tasks",
+			err.Error(),
+			map[string]any{"field": "selected_tasks"},
+			err,
+		)
+	}
+	return nil
 }
 
 func (m *RunManager) rejectCompletedTaskWorkflow(
@@ -2511,6 +2561,7 @@ func applyTaskProjectConfig(cfg *model.RuntimeConfig, projectCfg workspacecfg.Ta
 	if projectCfg.Recursive != nil {
 		cfg.Recursive = *projectCfg.Recursive
 	}
+	cfg.MultipleMode = projectCfg.EffectiveMultipleMode()
 	cfg.TaskRuntimeRules = model.CloneTaskRuntimeRules(derefTaskRuntimeRules(projectCfg.TaskRuntimeRules))
 }
 
@@ -2741,6 +2792,51 @@ func validateDaemonRuntimeConfig(cfg *model.RuntimeConfig) error {
 			nil,
 			err,
 		)
+	}
+	if err := validateRuntimeMultipleInputs(check); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateRuntimeMultipleInputs(cfg *model.RuntimeConfig) error {
+	mode := strings.TrimSpace(cfg.MultipleMode)
+	switch mode {
+	case "",
+		workspacecfg.TaskRunMultipleModeSequential,
+		workspacecfg.TaskRunMultipleModeEnqueued,
+		workspacecfg.TaskRunMultipleModeParallel:
+	default:
+		return apicore.NewProblem(
+			http.StatusUnprocessableEntity,
+			"invalid_multiple_mode",
+			"multiple_mode must be sequential or parallel",
+			map[string]any{"field": "multiple_mode"},
+			nil,
+		)
+	}
+	seen := make(map[string]struct{}, len(cfg.SelectedTasks))
+	for idx, raw := range cfg.SelectedTasks {
+		selectedTask := strings.TrimSpace(raw)
+		if selectedTask == "" {
+			return apicore.NewProblem(
+				http.StatusUnprocessableEntity,
+				"selected_task_required",
+				"selected_tasks must not contain empty entries",
+				map[string]any{"field": "selected_tasks", "index": idx},
+				nil,
+			)
+		}
+		if _, ok := seen[selectedTask]; ok {
+			return apicore.NewProblem(
+				http.StatusUnprocessableEntity,
+				"selected_task_duplicate",
+				fmt.Sprintf("duplicate selected task %q", selectedTask),
+				map[string]any{"field": "selected_tasks", "selected_task": selectedTask},
+				nil,
+			)
+		}
+		seen[selectedTask] = struct{}{}
 	}
 	return nil
 }

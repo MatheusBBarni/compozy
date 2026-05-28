@@ -223,7 +223,11 @@ func resolvePreparedEntries(
 		return nil, err
 	}
 
-	entries, err := readIssueEntries(prep.InputDirPath, cfg.Mode, cfg.IncludeCompleted, cfg.Recursive)
+	includeCompletedForRead := cfg.IncludeCompleted
+	if cfg.Mode == model.ExecutionModePRDTasks && len(cfg.SelectedTasks) > 0 {
+		includeCompletedForRead = true
+	}
+	entries, err := readIssueEntries(prep.InputDirPath, cfg.Mode, includeCompletedForRead, cfg.Recursive)
 	if err != nil {
 		return nil, err
 	}
@@ -434,7 +438,10 @@ func prepareJobs(
 		effectiveBatchSize = 1
 	}
 
-	collected := flattenBatchIssues(groups, cfg.Mode)
+	collected, err := flattenBatchIssuesForConfig(groups, cfg)
+	if err != nil {
+		return nil, err
+	}
 	batches := createIssueBatches(collected, effectiveBatchSize)
 	if len(batches) == 0 {
 		return nil, errors.New("no batches created for prompt preparation")
@@ -993,6 +1000,20 @@ func flattenBatchIssues(
 	}
 
 	return prompt.FlattenAndSortIssues(normalized, mode)
+}
+
+func flattenBatchIssuesForConfig(
+	groups map[string][]model.IssueEntry,
+	cfg *model.RuntimeConfig,
+) ([]model.IssueEntry, error) {
+	if cfg == nil {
+		return nil, errors.New("missing runtime config for batch flattening")
+	}
+	if cfg.Mode == model.ExecutionModePRDTasks && len(cfg.SelectedTasks) > 0 {
+		entries := flattenBatchIssues(groups, cfg.Mode)
+		return tasks.SelectTaskEntries(entries, cfg.SelectedTasks, cfg.IncludeCompleted)
+	}
+	return flattenBatchIssues(groups, cfg.Mode), nil
 }
 
 func groupIssuesByCodeFile(issues []model.IssueEntry) (map[string][]model.IssueEntry, []string) {

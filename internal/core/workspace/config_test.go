@@ -383,28 +383,28 @@ func TestLoadConfigParsesTaskRunMultipleMode(t *testing.T) {
 		name string
 		mode string
 	}{
-		{name: "enqueued", mode: TaskRunMultipleModeEnqueued},
+		{name: "sequential", mode: TaskRunMultipleModeSequential},
 		{name: "parallel", mode: TaskRunMultipleModeParallel},
 	}
 
 	for _, tc := range tests {
 		tc := tc
-		t.Run("Should parse run_multiple_mode="+tc.name, func(t *testing.T) {
+		t.Run("Should parse multiple="+tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			root := t.TempDir()
 			writeWorkspaceConfig(t, root, `
 [tasks.run]
-run_multiple_mode = "`+tc.mode+`"
+multiple = "`+tc.mode+`"
 `)
 
 			cfg, _, err := loadConfigWithIsolatedHome(t, root)
 			if err != nil {
 				t.Fatalf("load config: %v", err)
 			}
-			assertOptionalString(t, "tasks.run.run_multiple_mode", cfg.Tasks.Run.RunMultipleMode, ptrString(tc.mode))
+			assertOptionalString(t, "tasks.run.multiple", cfg.Tasks.Run.Multiple, ptrString(tc.mode))
 			if got := cfg.Tasks.Run.EffectiveRunMultipleMode(); got != tc.mode {
-				t.Fatalf("expected effective run_multiple_mode %q, got %q", tc.mode, got)
+				t.Fatalf("expected effective multiple %q, got %q", tc.mode, got)
 			}
 		})
 	}
@@ -458,8 +458,8 @@ recursive = false
 	}
 }
 
-func TestLoadConfigDefaultsTaskRunMultipleModeToEnqueued(t *testing.T) {
-	t.Run("Should default run_multiple_mode to enqueued", func(t *testing.T) {
+func TestLoadConfigDefaultsTaskRunMultipleModeToSequential(t *testing.T) {
+	t.Run("Should default multiple to sequential", func(t *testing.T) {
 		t.Parallel()
 
 		root := t.TempDir()
@@ -471,11 +471,11 @@ func TestLoadConfigDefaultsTaskRunMultipleModeToEnqueued(t *testing.T) {
 		if err != nil {
 			t.Fatalf("load config: %v", err)
 		}
-		if cfg.Tasks.Run.RunMultipleMode != nil {
-			t.Fatalf("expected unset run_multiple_mode pointer, got %#v", cfg.Tasks.Run.RunMultipleMode)
+		if cfg.Tasks.Run.Multiple != nil {
+			t.Fatalf("expected unset multiple pointer, got %#v", cfg.Tasks.Run.Multiple)
 		}
-		if got := cfg.Tasks.Run.EffectiveRunMultipleMode(); got != TaskRunMultipleModeEnqueued {
-			t.Fatalf("expected default run_multiple_mode %q, got %q", TaskRunMultipleModeEnqueued, got)
+		if got := cfg.Tasks.Run.EffectiveRunMultipleMode(); got != TaskRunMultipleModeSequential {
+			t.Fatalf("expected default multiple %q, got %q", TaskRunMultipleModeSequential, got)
 		}
 	})
 }
@@ -483,45 +483,45 @@ func TestLoadConfigDefaultsTaskRunMultipleModeToEnqueued(t *testing.T) {
 func TestTaskRunConfigEffectiveRunMultipleMode(t *testing.T) {
 	t.Parallel()
 
-	t.Run("Should treat whitespace-only run_multiple_mode as missing", func(t *testing.T) {
+	t.Run("Should treat whitespace-only multiple as missing", func(t *testing.T) {
 		t.Parallel()
 
 		mode := "   "
-		cfg := TaskRunConfig{RunMultipleMode: &mode}
-		if got := cfg.EffectiveRunMultipleMode(); got != TaskRunMultipleModeEnqueued {
-			t.Fatalf("EffectiveRunMultipleMode() = %q, want %q", got, TaskRunMultipleModeEnqueued)
+		cfg := TaskRunConfig{Multiple: &mode}
+		if got := cfg.EffectiveRunMultipleMode(); got != TaskRunMultipleModeSequential {
+			t.Fatalf("EffectiveRunMultipleMode() = %q, want %q", got, TaskRunMultipleModeSequential)
 		}
 	})
 }
 
 func TestLoadConfigRejectsInvalidTaskRunMultipleMode(t *testing.T) {
-	t.Run("Should reject invalid run_multiple_mode", func(t *testing.T) {
+	t.Run("Should reject invalid multiple", func(t *testing.T) {
 		t.Parallel()
 
 		root := t.TempDir()
 		writeWorkspaceConfig(t, root, `
 [tasks.run]
-run_multiple_mode = "invalid"
+multiple = "invalid"
 `)
 
 		_, _, err := loadConfigWithIsolatedHome(t, root)
 		if err == nil {
-			t.Fatal("expected invalid tasks.run.run_multiple_mode error")
+			t.Fatal("expected invalid tasks.run.multiple error")
 		}
-		if !strings.Contains(err.Error(), "tasks.run.run_multiple_mode") {
+		if !strings.Contains(err.Error(), "tasks.run.multiple") {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 }
 
 func TestLoadConfigAcceptsTaskRunMultipleModeAndRejectsUnknownTaskRunKeys(t *testing.T) {
-	t.Run("Should accept run_multiple_mode", func(t *testing.T) {
+	t.Run("Should accept multiple", func(t *testing.T) {
 		t.Parallel()
 
 		root := t.TempDir()
 		writeWorkspaceConfig(t, root, `
 [tasks.run]
-run_multiple_mode = "enqueued"
+multiple = "sequential"
 `)
 
 		cfg, _, err := loadConfigWithIsolatedHome(t, root)
@@ -530,10 +530,28 @@ run_multiple_mode = "enqueued"
 		}
 		assertOptionalString(
 			t,
-			"tasks.run.run_multiple_mode",
-			cfg.Tasks.Run.RunMultipleMode,
-			ptrString(TaskRunMultipleModeEnqueued),
+			"tasks.run.multiple",
+			cfg.Tasks.Run.Multiple,
+			ptrString(TaskRunMultipleModeSequential),
 		)
+	})
+
+	t.Run("Should reject legacy run_multiple_mode", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		writeWorkspaceConfig(t, root, `
+[tasks.run]
+run_multiple_mode = "enqueued"
+`)
+
+		_, _, err := loadConfigWithIsolatedHome(t, root)
+		if err == nil {
+			t.Fatal("expected legacy tasks.run.run_multiple_mode error")
+		}
+		if !strings.Contains(err.Error(), "tasks.run.run_multiple_mode") {
+			t.Fatalf("unexpected error: %v", err)
+		}
 	})
 
 	t.Run("Should reject unknown task-run key", func(t *testing.T) {
@@ -1395,7 +1413,7 @@ access_mode = "default"
 
 [tasks.run]
 include_completed = false
-run_multiple_mode = "enqueued"
+multiple = "sequential"
 `)
 	writeWorkspaceConfig(t, root, `
 [defaults]
@@ -1403,7 +1421,7 @@ model = "gpt-5.5"
 
 [tasks.run]
 include_completed = true
-run_multiple_mode = "parallel"
+multiple = "parallel"
 `)
 
 	cfg, path, err := LoadConfig(context.Background(), root)
@@ -1424,8 +1442,8 @@ run_multiple_mode = "parallel"
 	}
 	assertOptionalString(
 		t,
-		"tasks.run.run_multiple_mode",
-		cfg.Tasks.Run.RunMultipleMode,
+		"tasks.run.multiple",
+		cfg.Tasks.Run.Multiple,
 		ptrString(TaskRunMultipleModeParallel),
 	)
 }

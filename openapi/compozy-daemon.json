@@ -1493,12 +1493,22 @@
             },
             "TaskRunRequest": {
                 "properties": {
+                    "multiple_mode": {
+                        "enum": ["sequential", "parallel"],
+                        "type": "string"
+                    },
                     "presentation_mode": {
                         "type": "string"
                     },
                     "runtime_overrides": {
                         "additionalProperties": true,
                         "type": "object"
+                    },
+                    "selected_tasks": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array"
                     },
                     "workspace": {
                         "type": "string"
@@ -1517,6 +1527,9 @@
                     "slug": {
                         "type": "string"
                     },
+                    "selected_task": {
+                        "type": "string"
+                    },
                     "status": {
                         "enum": ["queued", "active", "completed", "failed", "canceled"],
                         "type": "string"
@@ -1528,7 +1541,11 @@
             "TaskRunMultipleRequest": {
                 "properties": {
                     "mode": {
-                        "enum": ["enqueued", "parallel"],
+                        "enum": ["enqueued", "sequential", "parallel"],
+                        "type": "string"
+                    },
+                    "multiple_mode": {
+                        "enum": ["sequential", "parallel"],
                         "type": "string"
                     },
                     "presentation_mode": {
@@ -1538,6 +1555,13 @@
                         "additionalProperties": true,
                         "type": "object"
                     },
+                    "selected_tasks": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "minItems": 1,
+                        "type": "array"
+                    },
                     "slugs": {
                         "items": {
                             "type": "string"
@@ -1545,11 +1569,13 @@
                         "minItems": 1,
                         "type": "array"
                     },
+                    "workflow_slug": {
+                        "type": "string"
+                    },
                     "workspace": {
                         "type": "string"
                     }
                 },
-                "required": ["slugs"],
                 "type": "object"
             },
             "TaskRunMultipleSnapshotResponse": {
