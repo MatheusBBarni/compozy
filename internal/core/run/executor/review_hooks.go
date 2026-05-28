@@ -16,6 +16,7 @@ import (
 	"github.com/compozy/compozy/internal/core/reviews"
 	"github.com/compozy/compozy/internal/core/run/internal/worktree"
 	"github.com/compozy/compozy/internal/core/tasks"
+	workspacecfg "github.com/compozy/compozy/internal/core/workspace"
 	"github.com/compozy/compozy/pkg/compozy/events"
 	"github.com/compozy/compozy/pkg/compozy/events/kinds"
 )
@@ -62,6 +63,10 @@ func (j *jobExecutionContext) afterTaskJobSuccess(
 		j.recordTaskNoOp(entry, oldTask.Status)
 		return nil
 	}
+	if j.isParallelChildTaskRun() {
+		j.recordTaskReconciliationDeferred(entry, oldTask.Status)
+		return nil
+	}
 	if err := tasks.MarkTaskCompleted(j.cfg.TasksDir, entry.Name); err != nil {
 		return err
 	}
@@ -103,6 +108,14 @@ func (j *jobExecutionContext) afterTaskJobSuccess(
 		meta.Total,
 	)
 	return nil
+}
+
+func (j *jobExecutionContext) isParallelChildTaskRun() bool {
+	return j != nil &&
+		j.cfg != nil &&
+		j.cfg.Mode == model.ExecutionModePRDTasks &&
+		strings.TrimSpace(j.cfg.ParentRunID) != "" &&
+		strings.TrimSpace(j.cfg.MultipleMode) == workspacecfg.TaskRunMultipleModeParallel
 }
 
 // workspaceUnchanged compares the pre-dispatch snapshot to a fresh capture and
@@ -147,6 +160,30 @@ func (j *jobExecutionContext) recordTaskNoOp(entry model.IssueEntry, preservedSt
 		"task_name", entry.Name,
 		"preserved_status", preservedStatus,
 		"reason", string(kinds.TaskFileSkippedReasonNoWorkspaceChanges),
+	)
+}
+
+func (j *jobExecutionContext) recordTaskReconciliationDeferred(entry model.IssueEntry, preservedStatus string) {
+	j.submitEventOrWarn(
+		events.EventKindTaskFileSkipped,
+		kinds.TaskFileSkippedPayload{
+			TasksDir:        j.cfg.TasksDir,
+			TaskName:        entry.Name,
+			FilePath:        entry.AbsPath,
+			PreservedStatus: preservedStatus,
+			Reason:          kinds.TaskFileSkippedReasonParallelChildDeferred,
+		},
+	)
+	j.runtimeLogger().Info(
+		"parallel child task completed; deferring workflow task-file reconciliation",
+		"tasks_dir",
+		j.cfg.TasksDir,
+		"task_name",
+		entry.Name,
+		"preserved_status",
+		preservedStatus,
+		"reason",
+		string(kinds.TaskFileSkippedReasonParallelChildDeferred),
 	)
 }
 

@@ -1,5 +1,5 @@
 ---
-status: pending
+status: completed
 title: Prevent source-workflow mutation during parallel child execution
 type: backend
 complexity: high
@@ -31,10 +31,10 @@ This task enforces the strongest trust invariant in the feature: child runs may 
 </requirements>
 
 ## Subtasks
-- [ ] 5.1 Gate task-file completion behavior for parallel child runs.
-- [ ] 5.2 Remove or redirect source-root sync/watch assumptions from child execution paths.
-- [ ] 5.3 Define the parent-side truth model for completed, failed, canceled, and unchanged child outcomes.
-- [ ] 5.4 Add regression coverage that proves source workflow files remain unchanged during parallel execution.
+- [x] 5.1 Gate task-file completion behavior for parallel child runs.
+- [x] 5.2 Remove or redirect source-root sync/watch assumptions from child execution paths.
+- [x] 5.3 Define the parent-side truth model for completed, failed, canceled, and unchanged child outcomes.
+- [x] 5.4 Add regression coverage that proves source workflow files remain unchanged during parallel execution.
 
 ## Implementation Details
 

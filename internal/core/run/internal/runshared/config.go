@@ -36,6 +36,7 @@ type Config struct {
 	DaemonOwned            bool
 	DetachOnly             bool
 	RunID                  string
+	ParentRunID            string
 	RunArtifacts           model.RunArtifacts
 	RuntimeManager         model.RuntimeManager
 	IncludeCompleted       bool
@@ -141,6 +142,7 @@ func NewConfig(src *model.RuntimeConfig, runArtifacts model.RunArtifacts) *Confi
 		DaemonOwned:            src.DaemonOwned,
 		DetachOnly:             false,
 		RunID:                  src.RunID,
+		ParentRunID:            src.ParentRunID,
 		RunArtifacts:           runArtifacts,
 		IncludeCompleted:       src.IncludeCompleted,
 		IncludeResolved:        src.IncludeResolved,

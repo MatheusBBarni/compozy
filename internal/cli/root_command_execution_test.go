@@ -1589,6 +1589,10 @@ func TestTasksRunMultipleCommandInProcessParallelConfigStreamsParallelContract(t
 [tasks.run]
 multiple = "parallel"
 `)
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git binary not available")
+		}
+		initCLIParallelWorktreeGitRepo(t, workspaceRoot)
 		withWorkingDir(t, workspaceRoot)
 
 		client := installInProcessCLIDaemonBootstrapWithConfigClient(t, daemon.RunManagerConfig{})
@@ -1639,6 +1643,32 @@ multiple = "parallel"
 			t.Fatalf("task.multi.started mode = %q, want parallel", started.Mode)
 		}
 	})
+}
+
+func initCLIParallelWorktreeGitRepo(t *testing.T, workspaceRoot string) {
+	t.Helper()
+	runCLIGit(t, workspaceRoot, "init", "--initial-branch=main")
+	runCLIGit(t, workspaceRoot, "config", "user.email", "cli-parallel@example.com")
+	runCLIGit(t, workspaceRoot, "config", "user.name", "CLI Parallel Test")
+	runCLIGit(t, workspaceRoot, "config", "commit.gpgsign", "false")
+	runCLIGit(t, workspaceRoot, "add", ".")
+	runCLIGit(t, workspaceRoot, "commit", "-m", "initial workflow")
+}
+
+func runCLIGit(t *testing.T, workDir string, args ...string) {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", args...)
+	cmd.Dir = workDir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf(
+			"git %s in %s failed: %v: %s",
+			strings.Join(args, " "),
+			workDir,
+			err,
+			strings.TrimSpace(string(output)),
+		)
+	}
 }
 
 func TestTasksRunMultipleCommandStreamReturnsNonZeroOnParentFailure(t *testing.T) {

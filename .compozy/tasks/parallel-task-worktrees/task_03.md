@@ -1,5 +1,5 @@
 ---
-status: pending
+status: completed
 title: Implement one-worktree-per-task creation and lifecycle
 type: backend
 complexity: high
@@ -29,10 +29,10 @@ This task introduces the dedicated daemon-local worktree layer required by the p
 </requirements>
 
 ## Subtasks
-- [ ] 3.1 Define the daemon-local worktree helper boundary and metadata model.
-- [ ] 3.2 Implement repository and source-workspace safety preflight checks for parallel task runs.
-- [ ] 3.3 Add deterministic branch naming and retained worktree path derivation.
-- [ ] 3.4 Implement worktree create/read lifecycle behavior with tests that cover retained-state expectations.
+- [x] 3.1 Define the daemon-local worktree helper boundary and metadata model.
+- [x] 3.2 Implement repository and source-workspace safety preflight checks for parallel task runs.
+- [x] 3.3 Add deterministic branch naming and retained worktree path derivation.
+- [x] 3.4 Implement worktree create/read lifecycle behavior with tests that cover retained-state expectations.
 
 ## Implementation Details
 
@@ -66,13 +66,13 @@ Reference the TechSpec sections "Worktree Provisioning Layer", "Worktree Metadat
 
 ## Tests
 - Unit tests:
-  - [ ] Branch and worktree naming are deterministic for a given parent run and selected task.
-  - [ ] Safety preflight rejects unsupported repository or workspace conditions.
-  - [ ] Retained worktree metadata includes the expected task and parent-run linkage.
+  - [x] Branch and worktree naming are deterministic for a given parent run and selected task.
+  - [x] Safety preflight rejects unsupported repository or workspace conditions.
+  - [x] Retained worktree metadata includes the expected task and parent-run linkage.
 - Integration tests:
-  - [ ] Real git repo setup provisions exactly one retained worktree folder for each selected task.
-  - [ ] Each provisioned worktree folder is outside the source workspace root.
-  - [ ] Worktree lifecycle operations leave the source workspace untouched during provisioning.
+  - [x] Real git repo setup provisions exactly one retained worktree folder for each selected task.
+  - [x] Each provisioned worktree folder is outside the source workspace root.
+  - [x] Worktree lifecycle operations leave the source workspace untouched during provisioning.
 - Test coverage target: >=80%
 - All tests must pass
 

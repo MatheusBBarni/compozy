@@ -861,6 +861,85 @@ func TestAfterTaskJobSuccessMarksCompletedWhenWorkspaceChanged(t *testing.T) {
 	}
 }
 
+func TestAfterTaskJobSuccessDefersCompletionForParallelChild(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
+
+	workspace := initTaskWorkspaceRepo(t)
+	tasksDir := filepath.Join(workspace, ".compozy", "tasks", "demo")
+	if err := os.MkdirAll(tasksDir, 0o755); err != nil {
+		t.Fatalf("mkdir tasks dir: %v", err)
+	}
+	writeRunTaskFile(t, tasksDir, "task_01.md", "pending")
+	if _, err := tasks.RefreshTaskMeta(tasksDir); err != nil {
+		t.Fatalf("refresh initial task meta: %v", err)
+	}
+	commitTaskWorkspace(t, workspace, "seed task")
+
+	taskPath := filepath.Join(tasksDir, "task_01.md")
+	originalContent, err := os.ReadFile(taskPath)
+	if err != nil {
+		t.Fatalf("read task file: %v", err)
+	}
+	preSnapshot, err := worktree.Capture(context.Background(), workspace)
+	if err != nil {
+		t.Fatalf("capture pre snapshot: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "produced.txt"), []byte("agent output"), 0o600); err != nil {
+		t.Fatalf("simulate agent output: %v", err)
+	}
+
+	runID, runJournal, eventsCh, cleanup := openRuntimeEventCapture(t)
+	defer cleanup()
+	execCtx := &jobExecutionContext{
+		ctx: context.Background(),
+		cfg: &config{
+			Mode:          model.ExecutionModePRDTasks,
+			TasksDir:      tasksDir,
+			WorkspaceRoot: workspace,
+			MultipleMode:  "parallel",
+			ParentRunID:   "parent-run",
+			RunArtifacts: model.RunArtifacts{
+				RunID: runID,
+			},
+		},
+		journal: runJournal,
+	}
+
+	if err := execCtx.afterJobSuccess(context.Background(), &job{
+		Groups: map[string][]model.IssueEntry{
+			"task_01": {{
+				Name:     "task_01.md",
+				AbsPath:  taskPath,
+				Content:  string(originalContent),
+				CodeFile: "task_01",
+			}},
+		},
+	}, preSnapshot); err != nil {
+		t.Fatalf("afterJobSuccess: %v", err)
+	}
+
+	updated, err := os.ReadFile(taskPath)
+	if err != nil {
+		t.Fatalf("read updated task file: %v", err)
+	}
+	if !strings.Contains(string(updated), "status: pending") {
+		t.Fatalf("expected parallel child task status to remain pending, got:\n%s", string(updated))
+	}
+
+	emitted := collectRuntimeEvents(t, eventsCh, 1)
+	if got := emitted[0].Kind; got != eventspkg.EventKindTaskFileSkipped {
+		t.Fatalf("expected task.file_skipped event, got %s", got)
+	}
+	var skipped kinds.TaskFileSkippedPayload
+	decodeRuntimeEventPayload(t, emitted[0], &skipped)
+	if skipped.Reason != kinds.TaskFileSkippedReasonParallelChildDeferred {
+		t.Fatalf("expected deferred reconciliation reason, got %q", skipped.Reason)
+	}
+	assertNoRuntimeEvents(t, eventsCh, 200*time.Millisecond)
+}
+
 func initTaskWorkspaceRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

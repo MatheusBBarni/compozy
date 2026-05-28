@@ -1205,13 +1205,15 @@ func (m *RunManager) startRun(ctx context.Context, spec startRunSpec) (apicore.R
 		}
 	}()
 	active := newActiveRun(runCtx, cancel, row, spec, scope)
-	if err := m.syncWorkflowBeforeRun(runCtx, active); err != nil {
-		active.cancel()
-		return apicore.Run{}, m.failStartRun(ctx, row, active.currentCloseTimeout(), scope, createdRun, err)
-	}
-	if err := m.startWatcher(active); err != nil {
-		active.cancel()
-		return apicore.Run{}, m.failStartRun(ctx, row, active.currentCloseTimeout(), scope, createdRun, err)
+	if !isParallelTaskChildRunSpec(spec) {
+		if err := m.syncWorkflowBeforeRun(runCtx, active); err != nil {
+			active.cancel()
+			return apicore.Run{}, m.failStartRun(ctx, row, active.currentCloseTimeout(), scope, createdRun, err)
+		}
+		if err := m.startWatcher(active); err != nil {
+			active.cancel()
+			return apicore.Run{}, m.failStartRun(ctx, row, active.currentCloseTimeout(), scope, createdRun, err)
+		}
 	}
 	m.setActive(active)
 
@@ -1220,6 +1222,13 @@ func (m *RunManager) startRun(ctx context.Context, spec startRunSpec) (apicore.R
 	started = true
 
 	return m.toCoreRun(detachContext(ctx), row, active.workflowSlug)
+}
+
+func isParallelTaskChildRunSpec(spec startRunSpec) bool {
+	return spec.mode == runModeTask &&
+		spec.runtimeCfg != nil &&
+		strings.TrimSpace(spec.runtimeCfg.ParentRunID) != "" &&
+		strings.TrimSpace(spec.runtimeCfg.MultipleMode) == workspacecfg.TaskRunMultipleModeParallel
 }
 
 func (m *RunManager) prepareRunRow(

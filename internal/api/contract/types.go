@@ -56,11 +56,12 @@ type TaskRunMultipleRequest struct {
 }
 
 type TaskRunMultipleItem struct {
-	Slug         string `json:"slug"`
-	SelectedTask string `json:"selected_task,omitempty"`
-	Status       string `json:"status"`
-	RunID        string `json:"run_id,omitempty"`
-	ErrorText    string `json:"error_text,omitempty"`
+	Slug          string `json:"slug"`
+	SelectedTask  string `json:"selected_task,omitempty"`
+	Status        string `json:"status"`
+	DisplayStatus string `json:"display_status,omitempty"`
+	RunID         string `json:"run_id,omitempty"`
+	ErrorText     string `json:"error_text,omitempty"`
 }
 
 type TaskRunMultipleSnapshot struct {

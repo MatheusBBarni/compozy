@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -16,6 +19,7 @@ import (
 	"github.com/compozy/compozy/internal/core/model"
 	"github.com/compozy/compozy/internal/store/globaldb"
 	eventspkg "github.com/compozy/compozy/pkg/compozy/events"
+	"github.com/compozy/compozy/pkg/compozy/events/kinds"
 )
 
 func TestRunManagerTaskRunMultipleRunsChildrenSequentially(t *testing.T) {
@@ -100,6 +104,127 @@ func TestRunManagerTaskRunMultipleRunsChildrenSequentially(t *testing.T) {
 		requireRunEvent(t, parent.RunID, eventspkg.EventKindTaskRunMultipleChildCompleted)
 		requireRunEvent(t, parent.RunID, eventspkg.EventKindTaskRunMultipleQueueCompleted)
 	})
+}
+
+func TestRunManagerParallelChildPreservesSourceWorkflowFiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
+
+	env := newRunManagerTestEnv(t, runManagerTestDeps{
+		buildRunID: taskMultiRunIDBuilder("task-multi-source-protection"),
+		prepare: func(context.Context, *model.RuntimeConfig, model.RunScope) (*model.SolvePreparation, error) {
+			return &model.SolvePreparation{}, nil
+		},
+		execute: func(_ context.Context, _ *model.SolvePreparation, cfg *model.RuntimeConfig) error {
+			return os.WriteFile(filepath.Join(cfg.WorkspaceRoot, "child-output.txt"), []byte("child output"), 0o600)
+		},
+	})
+	taskPath := env.writeWorkflowFile(t, env.workflowSlug, "task_01.md", daemonTaskBody("pending", "Protected task"))
+	metaPath := env.writeWorkflowFile(t, env.workflowSlug, "_meta.md", daemonLegacyWorkflowMetaBody())
+	tasksPath := env.writeWorkflowFile(t, env.workflowSlug, "_tasks.md", "Legacy generated summary\n")
+	sourceBefore := readFilesByPath(t, taskPath, metaPath, tasksPath)
+	initAndCommitTaskMultiWorkspace(t, env.workspaceRoot)
+
+	parent, err := env.manager.StartTaskRunMultiple(
+		context.Background(),
+		env.workspaceRoot,
+		apicore.TaskRunMultipleRequest{
+			Workspace:        env.workspaceRoot,
+			WorkflowSlug:     env.workflowSlug,
+			SelectedTasks:    []string{"task_01"},
+			Mode:             "parallel",
+			PresentationMode: defaultPresentationMode,
+			RuntimeOverrides: rawJSON(t, `{"run_id":"task-multi-source-protection"}`),
+		},
+	)
+	if err != nil {
+		t.Fatalf("StartTaskRunMultiple(parallel) error = %v", err)
+	}
+	waitForRun(t, env.globalDB, parent.RunID, func(row globaldb.Run) bool {
+		return row.Status == runStatusCompleted
+	})
+
+	assertFilesEqual(t, sourceBefore, taskPath, metaPath, tasksPath)
+	snapshot, err := env.manager.RunMultipleSnapshot(context.Background(), parent.RunID)
+	if err != nil {
+		t.Fatalf("RunMultipleSnapshot() error = %v", err)
+	}
+	wantItems := []apicore.TaskRunMultipleItem{
+		{
+			Slug:          "task_01",
+			SelectedTask:  "task_01",
+			Status:        taskMultiItemStatusCompleted,
+			DisplayStatus: taskMultiItemStatusCompleted,
+			RunID:         "child-daemon-workflow",
+		},
+	}
+	assertTaskMultiItems(t, snapshot.Items, wantItems)
+}
+
+func TestRunManagerParallelChildOutcomeReportsUnchanged(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
+
+	env := newRunManagerTestEnv(t, runManagerTestDeps{
+		buildRunID: taskMultiRunIDBuilder("task-multi-unchanged"),
+		prepare: func(ctx context.Context, cfg *model.RuntimeConfig, scope model.RunScope) (*model.SolvePreparation, error) {
+			if strings.TrimSpace(cfg.ParentRunID) != "" {
+				submitEvent(
+					ctx,
+					t,
+					scope.RunJournal(),
+					cfg.RunID,
+					eventspkg.EventKindTaskFileSkipped,
+					kinds.TaskFileSkippedPayload{
+						TasksDir:        cfg.TasksDir,
+						TaskName:        "task_01.md",
+						FilePath:        filepath.Join(cfg.TasksDir, "task_01.md"),
+						PreservedStatus: "pending",
+						Reason:          kinds.TaskFileSkippedReasonNoWorkspaceChanges,
+					},
+				)
+			}
+			return &model.SolvePreparation{}, nil
+		},
+		execute: func(context.Context, *model.SolvePreparation, *model.RuntimeConfig) error { return nil },
+	})
+	env.writeWorkflowFile(t, env.workflowSlug, "task_01.md", daemonTaskBody("pending", "Unchanged task"))
+	initAndCommitTaskMultiWorkspace(t, env.workspaceRoot)
+
+	parent, err := env.manager.StartTaskRunMultiple(
+		context.Background(),
+		env.workspaceRoot,
+		apicore.TaskRunMultipleRequest{
+			Workspace:        env.workspaceRoot,
+			WorkflowSlug:     env.workflowSlug,
+			SelectedTasks:    []string{"task_01"},
+			Mode:             "parallel",
+			PresentationMode: defaultPresentationMode,
+			RuntimeOverrides: rawJSON(t, `{"run_id":"task-multi-unchanged"}`),
+		},
+	)
+	if err != nil {
+		t.Fatalf("StartTaskRunMultiple(parallel unchanged) error = %v", err)
+	}
+	waitForRun(t, env.globalDB, parent.RunID, func(row globaldb.Run) bool {
+		return row.Status == runStatusCompleted
+	})
+	snapshot, err := env.manager.RunMultipleSnapshot(context.Background(), parent.RunID)
+	if err != nil {
+		t.Fatalf("RunMultipleSnapshot() error = %v", err)
+	}
+	wantItems := []apicore.TaskRunMultipleItem{
+		{
+			Slug:          "task_01",
+			SelectedTask:  "task_01",
+			Status:        taskMultiItemStatusCompleted,
+			DisplayStatus: taskMultiItemStatusUnchanged,
+			RunID:         "child-daemon-workflow",
+		},
+	}
+	assertTaskMultiItems(t, snapshot.Items, wantItems)
 }
 
 func TestRunManagerTaskRunMultipleStopsOnFirstChildFailure(t *testing.T) {
@@ -298,14 +423,23 @@ func TestRunManagerTaskRunMultiplePreflightRejectsInvalidInputBeforeParentRun(t 
 		}
 	})
 
-	t.Run("Should accept parallel mode contract before orchestration is implemented", func(t *testing.T) {
+	t.Run("Should accept parallel mode when git worktree prerequisites pass", func(t *testing.T) {
 		t.Parallel()
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git binary not available")
+		}
 
 		env := newRunManagerTestEnv(
 			t,
 			runManagerTestDeps{buildRunID: taskMultiRunIDBuilder("task-multi-parallel-mode")},
 		)
 		writeTaskMultiWorkflow(t, env, "alpha", "pending")
+		runGitOutput(t, env.workspaceRoot, "init", "--initial-branch=main")
+		runGitOutput(t, env.workspaceRoot, "config", "user.email", "task-multi@example.com")
+		runGitOutput(t, env.workspaceRoot, "config", "user.name", "Task Multi Test")
+		runGitOutput(t, env.workspaceRoot, "config", "commit.gpgsign", "false")
+		runGitOutput(t, env.workspaceRoot, "add", ".")
+		runGitOutput(t, env.workspaceRoot, "commit", "-m", "initial workflow")
 
 		_, err := env.manager.StartTaskRunMultiple(
 			context.Background(),
@@ -638,6 +772,47 @@ func taskMultiRunIDBuilder(parentRunID string) func(*model.RuntimeConfig) (strin
 	}
 }
 
+func initAndCommitTaskMultiWorkspace(t *testing.T, workspaceRoot string) {
+	t.Helper()
+	runGitOutput(t, workspaceRoot, "init", "--initial-branch=main")
+	runGitOutput(t, workspaceRoot, "config", "user.email", "task-multi@example.com")
+	runGitOutput(t, workspaceRoot, "config", "user.name", "Task Multi Test")
+	runGitOutput(t, workspaceRoot, "config", "commit.gpgsign", "false")
+	runGitOutput(t, workspaceRoot, "add", ".")
+	runGitOutput(t, workspaceRoot, "commit", "-m", "initial workflow")
+}
+
+func readFilesByPath(t *testing.T, paths ...string) map[string]string {
+	t.Helper()
+	contents := make(map[string]string, len(paths))
+	for _, path := range paths {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		contents[path] = string(content)
+	}
+	return contents
+}
+
+func assertFilesEqual(t *testing.T, want map[string]string, paths ...string) {
+	t.Helper()
+	for _, path := range paths {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s after run: %v", path, err)
+		}
+		if string(content) != want[path] {
+			t.Fatalf(
+				"%s changed during parallel child execution\nwant:\n%s\ngot:\n%s",
+				path,
+				want[path],
+				string(content),
+			)
+		}
+	}
+}
+
 func assertNoTaskMultiStart(t *testing.T, ch <-chan string, label string) {
 	t.Helper()
 	select {
@@ -681,6 +856,12 @@ func assertTaskMultiItems(t *testing.T, got []apicore.TaskRunMultipleItem, want 
 			got[idx].RunID != want[idx].RunID ||
 			!strings.Contains(got[idx].ErrorText, want[idx].ErrorText) {
 			t.Fatalf("item[%d] = %#v, want %#v", idx, got[idx], want[idx])
+		}
+		if want[idx].SelectedTask != "" && got[idx].SelectedTask != want[idx].SelectedTask {
+			t.Fatalf("item[%d].SelectedTask = %q, want %q", idx, got[idx].SelectedTask, want[idx].SelectedTask)
+		}
+		if want[idx].DisplayStatus != "" && got[idx].DisplayStatus != want[idx].DisplayStatus {
+			t.Fatalf("item[%d].DisplayStatus = %q, want %q", idx, got[idx].DisplayStatus, want[idx].DisplayStatus)
 		}
 	}
 }

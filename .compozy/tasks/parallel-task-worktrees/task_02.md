@@ -1,5 +1,5 @@
 ---
-status: pending
+status: completed
 title: Make existing `--multiple` run correctly in sequential mode
 type: backend
 complexity: high
@@ -29,10 +29,10 @@ This task makes the non-parallel path work first. It ensures `--multiple` can ex
 </requirements>
 
 ## Subtasks
-- [ ] 2.1 Add selected-task validation against discovered workflow task entries.
-- [ ] 2.2 Update planner and prompt preparation paths to use the explicit ordered subset when present.
-- [ ] 2.3 Reuse the normal sequential task-run path for validated multi-task execution.
-- [ ] 2.4 Confirm task-runtime rule behavior remains correct for selected-task runs.
+- [x] 2.1 Add selected-task validation against discovered workflow task entries.
+- [x] 2.2 Update planner and prompt preparation paths to use the explicit ordered subset when present.
+- [x] 2.3 Reuse the normal sequential task-run path for validated multi-task execution.
+- [x] 2.4 Confirm task-runtime rule behavior remains correct for selected-task runs.
 
 ## Implementation Details
 
@@ -68,13 +68,13 @@ Reference the TechSpec sections "Data Flow", "Task Run Request Additions", and "
 
 ## Tests
 - Unit tests:
-  - [ ] Explicit selected-task order is preserved through planning and prompt preparation.
-  - [ ] Duplicate, missing, and completed selected tasks produce the expected validation errors.
-  - [ ] Task-runtime rules still match the correct selected task identifiers.
+  - [x] Explicit selected-task order is preserved through planning and prompt preparation.
+  - [x] Duplicate, missing, and completed selected tasks produce the expected validation errors.
+  - [x] Task-runtime rules still match the correct selected task identifiers.
 - Integration tests:
-  - [ ] `tasks run --multiple` executes only the selected tasks in sequential mode through the normal task-run path.
-  - [ ] `tasks run --multiple` with `multiple = "sequential"` preserves selected-task order from CLI selection through execution.
-  - [ ] Sequential selected-task execution leaves unselected workflow tasks untouched.
+  - [x] `tasks run --multiple` executes only the selected tasks in sequential mode through the normal task-run path.
+  - [x] `tasks run --multiple` with `multiple = "sequential"` preserves selected-task order from CLI selection through execution.
+  - [x] Sequential selected-task execution leaves unselected workflow tasks untouched.
 - Test coverage target: >=80%
 - All tests must pass
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ const (
 	taskMultiItemStatusCompleted = "completed"
 	taskMultiItemStatusFailed    = "failed"
 	taskMultiItemStatusCanceled  = "canceled"
+	taskMultiItemStatusUnchanged = "unchanged"
 
 	taskMultiChildPollInterval = 100 * time.Millisecond
 )
@@ -32,8 +34,10 @@ const (
 type preparedTaskMulti struct {
 	workspace        globaldb.Workspace
 	mode             string
+	workflowSlug     string
 	presentationMode string
 	items            []preparedTaskMultiItem
+	worktrees        *TaskMultiWorktreeManifest
 }
 
 type preparedTaskMultiItem struct {
@@ -43,6 +47,7 @@ type preparedTaskMultiItem struct {
 	workflowID   *string
 	workflowRoot string
 	runtimeCfg   *model.RuntimeConfig
+	worktree     TaskMultiWorktreeMetadata
 }
 
 type taskMultiSnapshotBuilder struct {
@@ -91,6 +96,7 @@ func (m *RunManager) StartTaskRunMultiple(
 	}
 	return m.startRun(ctx, startRunSpec{
 		workspace:        prepared.workspace,
+		workflowSlug:     prepared.workflowSlug,
 		mode:             runModeTaskMulti,
 		presentationMode: prepared.presentationMode,
 		runtimeCfg:       runtimeCfg,
@@ -207,6 +213,7 @@ func (m *RunManager) prepareTaskMultiStart(
 	return &preparedTaskMulti{
 		workspace:        workspaceRow,
 		mode:             mode,
+		workflowSlug:     workflowSlug,
 		presentationMode: presentationMode,
 		items:            items,
 	}, nil
@@ -347,6 +354,11 @@ func (m *RunManager) runTaskMultiCoordinator(active *activeRun) error {
 	}
 	prepared := active.taskMulti
 	total := len(prepared.items)
+	if prepared.mode == workspacecfg.TaskRunMultipleModeParallel {
+		if err := m.provisionTaskMultiWorktrees(active, prepared); err != nil {
+			return err
+		}
+	}
 	if err := m.emitTaskMultiEvent(active, eventspkg.EventKindTaskRunMultipleStarted, kinds.TaskRunMultiplePayload{
 		Mode:   prepared.mode,
 		Status: runStatusRunning,
@@ -355,7 +367,8 @@ func (m *RunManager) runTaskMultiCoordinator(active *activeRun) error {
 	}); err != nil {
 		return err
 	}
-	for idx, item := range prepared.items {
+	for idx := range prepared.items {
+		item := prepared.items[idx]
 		if err := m.emitTaskMultiItemEvent(
 			active,
 			eventspkg.EventKindTaskRunMultipleItemQueued,
@@ -365,11 +378,13 @@ func (m *RunManager) runTaskMultiCoordinator(active *activeRun) error {
 			taskMultiItemStatusQueued,
 			"",
 			"",
+			"",
 		); err != nil {
 			return err
 		}
 	}
-	for idx, item := range prepared.items {
+	for idx := range prepared.items {
+		item := prepared.items[idx]
 		if err := context.Cause(active.ctx); err != nil {
 			if emitErr := m.cancelTaskMultiQueuedItems(active, prepared.items, idx, total, err); emitErr != nil {
 				return errors.Join(err, emitErr)
@@ -388,6 +403,104 @@ func (m *RunManager) runTaskMultiCoordinator(active *activeRun) error {
 	})
 }
 
+func (m *RunManager) provisionTaskMultiWorktrees(active *activeRun, prepared *preparedTaskMulti) error {
+	if active == nil || prepared == nil {
+		return errors.New("task multi worktree provisioning requires an active run")
+	}
+	selectedTasks := make([]string, 0, len(prepared.items))
+	for idx := range prepared.items {
+		item := &prepared.items[idx]
+		selectedTask := strings.TrimSpace(item.selectedTask)
+		if selectedTask == "" {
+			selectedTask = strings.TrimSpace(item.slug)
+		}
+		selectedTasks = append(selectedTasks, selectedTask)
+	}
+	workflowSlug := strings.TrimSpace(prepared.workflowSlug)
+	if workflowSlug == "" {
+		workflowSlug = strings.TrimSpace(active.workflowSlug)
+	}
+	if workflowSlug == "" {
+		workflowSlug = "multi-task"
+	}
+	manifest, err := newTaskMultiWorktreeProvisioner().Provision(active.ctx, taskMultiWorktreeRequest{
+		ParentRunID:         active.runID,
+		WorkflowSlug:        workflowSlug,
+		SourceWorkspaceRoot: prepared.workspace.RootDir,
+		SelectedTasks:       selectedTasks,
+	})
+	if err != nil {
+		return err
+	}
+	prepared.worktrees = &manifest
+	byTask := make(map[string]TaskMultiWorktreeMetadata, len(manifest.Worktrees))
+	for idx := range manifest.Worktrees {
+		metadata := manifest.Worktrees[idx]
+		byTask[metadata.TaskName] = metadata
+	}
+	for idx := range prepared.items {
+		item := &prepared.items[idx]
+		selectedTask := strings.TrimSpace(item.selectedTask)
+		if selectedTask == "" {
+			selectedTask = strings.TrimSpace(item.slug)
+		}
+		metadata, ok := byTask[selectedTask]
+		if !ok {
+			return fmt.Errorf("missing worktree metadata for selected task %q", selectedTask)
+		}
+		workspaceRoot, err := mapTaskMultiWorktreePath(
+			metadata.SourceRepositoryRoot,
+			prepared.workspace.RootDir,
+			metadata.WorktreePath,
+		)
+		if err != nil {
+			return err
+		}
+		workflowRoot, err := mapTaskMultiWorktreePath(
+			metadata.SourceRepositoryRoot,
+			item.workflowRoot,
+			metadata.WorktreePath,
+		)
+		if err != nil {
+			return err
+		}
+		item.worktree = metadata
+		item.workflowRoot = workflowRoot
+		if item.runtimeCfg != nil {
+			item.runtimeCfg.WorkspaceRoot = workspaceRoot
+			item.runtimeCfg.TasksDir = workflowRoot
+		}
+	}
+	return nil
+}
+
+func mapTaskMultiWorktreePath(sourceRoot string, sourcePath string, worktreeRoot string) (string, error) {
+	resolvedSourceRoot, err := resolveTaskMultiComparablePath(sourceRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve source workspace root: %w", err)
+	}
+	resolvedSourcePath, err := resolveTaskMultiComparablePath(sourcePath)
+	if err != nil {
+		return "", fmt.Errorf("resolve source workflow root: %w", err)
+	}
+	resolvedWorktreeRoot, err := resolveTaskMultiComparablePath(worktreeRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve child worktree root: %w", err)
+	}
+	rel, err := filepath.Rel(resolvedSourceRoot, resolvedSourcePath)
+	if err != nil {
+		return "", fmt.Errorf("map source workflow root into worktree: %w", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf(
+			"source workflow root %q must be inside source workspace root %q",
+			resolvedSourcePath,
+			resolvedSourceRoot,
+		)
+	}
+	return filepath.Join(resolvedWorktreeRoot, rel), nil
+}
+
 func (m *RunManager) runTaskMultiChildAt(
 	active *activeRun,
 	prepared *preparedTaskMulti,
@@ -404,6 +517,7 @@ func (m *RunManager) runTaskMultiChildAt(
 			index,
 			total,
 			taskMultiItemStatusFailed,
+			"",
 			"",
 			err.Error(),
 		)
@@ -424,6 +538,7 @@ func (m *RunManager) runTaskMultiChildAt(
 			total,
 			taskMultiItemStatusCanceled,
 			childRun.RunID,
+			"",
 			err.Error(),
 		)
 		cancelErr := m.cancelTaskMultiQueuedItems(active, prepared.items, index+1, total, err)
@@ -490,6 +605,7 @@ func (m *RunManager) startTaskMultiChild(
 		index,
 		total,
 		taskMultiItemStatusRunning,
+		"",
 		childRun.RunID,
 		"",
 	); err != nil {
@@ -506,6 +622,7 @@ func (m *RunManager) finishTaskMultiChild(
 	total int,
 	childRow globaldb.Run,
 ) error {
+	displayStatus := m.taskMultiChildDisplayStatus(active.ctx, childRow)
 	switch childRow.Status {
 	case runStatusCompleted:
 		return m.emitTaskMultiItemEvent(
@@ -515,6 +632,7 @@ func (m *RunManager) finishTaskMultiChild(
 			index,
 			total,
 			taskMultiItemStatusCompleted,
+			displayStatus,
 			childRow.RunID,
 			"",
 		)
@@ -526,6 +644,7 @@ func (m *RunManager) finishTaskMultiChild(
 			index,
 			total,
 			taskMultiItemStatusCanceled,
+			displayStatus,
 			childRow.RunID,
 			childRow.ErrorText,
 		)
@@ -537,10 +656,52 @@ func (m *RunManager) finishTaskMultiChild(
 			index,
 			total,
 			taskMultiItemStatusFailed,
+			displayStatus,
 			childRow.RunID,
 			childRow.ErrorText,
 		)
 	}
+}
+
+func (m *RunManager) taskMultiChildDisplayStatus(ctx context.Context, childRow globaldb.Run) string {
+	switch childRow.Status {
+	case runStatusCancelled:
+		return taskMultiItemStatusCanceled
+	case runStatusCompleted:
+		if m.taskMultiChildWasUnchanged(ctx, childRow.RunID) {
+			return taskMultiItemStatusUnchanged
+		}
+		return taskMultiItemStatusCompleted
+	default:
+		return taskMultiItemStatusFailed
+	}
+}
+
+func (m *RunManager) taskMultiChildWasUnchanged(ctx context.Context, childRunID string) bool {
+	lease, err := m.acquireRunDB(detachContext(ctx), strings.TrimSpace(childRunID))
+	if err != nil {
+		return false
+	}
+	defer func() {
+		_ = lease.Close()
+	}()
+	eventRows, err := lease.DB().ListEvents(detachContext(ctx), 0, 0)
+	if err != nil {
+		return false
+	}
+	for _, event := range eventRows.Events {
+		if event.Kind != eventspkg.EventKindTaskFileSkipped {
+			continue
+		}
+		var payload kinds.TaskFileSkippedPayload
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			continue
+		}
+		if payload.Reason == kinds.TaskFileSkippedReasonNoWorkspaceChanges {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *RunManager) waitForTaskMultiChild(ctx context.Context, runID string) (globaldb.Run, error) {
@@ -585,6 +746,7 @@ func (m *RunManager) cancelTaskMultiQueuedItems(
 			total,
 			taskMultiItemStatusCanceled,
 			"",
+			"",
 			errorString(cause),
 		))
 	}
@@ -608,17 +770,19 @@ func (m *RunManager) emitTaskMultiItemEvent(
 	index int,
 	total int,
 	status string,
+	displayStatus string,
 	childRunID string,
 	errorText string,
 ) error {
 	return m.emitTaskMultiEvent(active, kind, kinds.TaskRunMultiplePayload{
-		Slug:         item.slug,
-		SelectedTask: strings.TrimSpace(item.selectedTask),
-		Index:        index,
-		Total:        total,
-		Status:       status,
-		ChildRunID:   strings.TrimSpace(childRunID),
-		Error:        strings.TrimSpace(errorText),
+		Slug:          item.slug,
+		SelectedTask:  strings.TrimSpace(item.selectedTask),
+		Index:         index,
+		Total:         total,
+		Status:        status,
+		DisplayStatus: strings.TrimSpace(displayStatus),
+		ChildRunID:    strings.TrimSpace(childRunID),
+		Error:         strings.TrimSpace(errorText),
 	})
 }
 
@@ -655,8 +819,8 @@ func (m *RunManager) emitTaskMultiEvent(
 
 func preparedTaskMultiSlugs(items []preparedTaskMultiItem) []string {
 	slugs := make([]string, 0, len(items))
-	for _, item := range items {
-		slugs = append(slugs, item.slug)
+	for idx := range items {
+		slugs = append(slugs, items[idx].slug)
 	}
 	return slugs
 }
@@ -690,6 +854,7 @@ func (b *taskMultiSnapshotBuilder) applyEvent(event eventspkg.Event) error {
 		item.Slug = strings.TrimSpace(payload.Slug)
 		item.SelectedTask = strings.TrimSpace(payload.SelectedTask)
 		item.Status = strings.TrimSpace(payload.Status)
+		item.DisplayStatus = strings.TrimSpace(payload.DisplayStatus)
 		if childRunID := strings.TrimSpace(payload.ChildRunID); childRunID != "" {
 			item.RunID = childRunID
 		}

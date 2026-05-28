@@ -27,6 +27,7 @@ const (
 	taskMultiStatusCompleted = "completed"
 	taskMultiStatusFailed    = "failed"
 	taskMultiStatusCanceled  = "canceled"
+	taskMultiStatusUnchanged = "unchanged"
 )
 
 var (
@@ -203,6 +204,9 @@ func newMultiRunTab(item apicore.TaskRunMultipleItem) multiRunTab {
 	status := strings.TrimSpace(item.Status)
 	if status == "" {
 		status = taskMultiStatusQueued
+	}
+	if displayStatus := strings.TrimSpace(item.DisplayStatus); displayStatus != "" {
+		status = displayStatus
 	}
 	return multiRunTab{
 		slug:       strings.TrimSpace(item.Slug),
@@ -673,6 +677,9 @@ func (m *multiRunModel) applyTaskMultiItem(ev events.Event) {
 	tab := &m.tabs[idx]
 	if payload.Status != "" {
 		tab.status = strings.TrimSpace(payload.Status)
+	}
+	if payload.DisplayStatus != "" {
+		tab.status = strings.TrimSpace(payload.DisplayStatus)
 	}
 	if childRunID := strings.TrimSpace(payload.ChildRunID); childRunID != "" {
 		tab.runID = childRunID
@@ -1175,7 +1182,7 @@ func tabStatus(tab *multiRunTab) string {
 
 func isTerminalTaskMultiStatus(status string) bool {
 	switch strings.TrimSpace(status) {
-	case taskMultiStatusCompleted, taskMultiStatusFailed, taskMultiStatusCanceled:
+	case taskMultiStatusCompleted, taskMultiStatusFailed, taskMultiStatusCanceled, taskMultiStatusUnchanged:
 		return true
 	default:
 		return false
@@ -1214,7 +1221,7 @@ func multiRunStatusColor(status string) color.Color {
 	switch strings.TrimSpace(status) {
 	case taskMultiStatusRunning:
 		return colorAccentAlt
-	case taskMultiStatusCompleted:
+	case taskMultiStatusCompleted, taskMultiStatusUnchanged:
 		return colorSuccess
 	case taskMultiStatusFailed:
 		return colorError

@@ -1,5 +1,5 @@
 ---
-status: pending
+status: completed
 title: Align multi-task run contracts and config semantics
 type: backend
 complexity: high
@@ -28,10 +28,10 @@ This task establishes the contract that all later work depends on. It aligns con
 </requirements>
 
 ## Subtasks
-- [ ] 1.1 Replace the current cross-workflow `--multiple` contract assumptions with the task-scoped contract defined in the TechSpec.
-- [ ] 1.2 Add explicit config and runtime fields for multiple-mode and selected-task inputs.
-- [ ] 1.3 Update request, route, and client contracts so daemon task runs receive the new first-class fields.
-- [ ] 1.4 Align validation rules, defaults, and public help/schema output with the approved contract.
+- [x] 1.1 Replace the current cross-workflow `--multiple` contract assumptions with the task-scoped contract defined in the TechSpec.
+- [x] 1.2 Add explicit config and runtime fields for multiple-mode and selected-task inputs.
+- [x] 1.3 Update request, route, and client contracts so daemon task runs receive the new first-class fields.
+- [x] 1.4 Align validation rules, defaults, and public help/schema output with the approved contract.
 
 ## Implementation Details
 
@@ -69,12 +69,12 @@ Focus on the TechSpec sections "System Architecture", "Implementation Design", a
 
 ## Tests
 - Unit tests:
-  - [ ] Config parsing accepts the sequential default and explicit parallel opt-in for task runs.
-  - [ ] Validation rejects duplicate selected-task identifiers and invalid multiple-mode values.
-  - [ ] Runtime config cloning preserves the new selected-task and multiple-mode fields.
+  - [x] Config parsing accepts the sequential default and explicit parallel opt-in for task runs.
+  - [x] Validation rejects duplicate selected-task identifiers and invalid multiple-mode values.
+  - [x] Runtime config cloning preserves the new selected-task and multiple-mode fields.
 - Integration tests:
-  - [ ] CLI request construction sends the new first-class fields to the daemon task-run endpoint.
-  - [ ] API handler and client contract tests confirm request and schema alignment for the new fields.
+  - [x] CLI request construction sends the new first-class fields to the daemon task-run endpoint.
+  - [x] API handler and client contract tests confirm request and schema alignment for the new fields.
 - Test coverage target: >=80%
 - All tests must pass
 
