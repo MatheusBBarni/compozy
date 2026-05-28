@@ -57,7 +57,6 @@ func TestResolveHomePathsFromExpandsTilde(t *testing.T) {
 		t.Fatalf("HomeDir = %q, want %q", got, want)
 	}
 }
-
 func TestResolveHomePathsUsesUserHome(t *testing.T) {
 	homeDir := t.TempDir()
 	stubConfigUserHomeDir(t, func() (string, error) {

@@ -72,7 +72,6 @@ func ResolveHomePathsFrom(homeDir string) (HomePaths, error) {
 	if err != nil {
 		return HomePaths{}, err
 	}
-
 	return HomePaths{
 		HomeDir:       root,
 		ConfigFile:    filepath.Join(root, ConfigFileName),
