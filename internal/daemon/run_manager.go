@@ -2430,14 +2430,19 @@ func completedTerminalState(runArtifacts model.RunArtifacts, summary string) ter
 }
 
 func failedTerminalState(runArtifacts model.RunArtifacts, err error) terminalState {
+	return failedTerminalStateWithSummary(runArtifacts, err, "")
+}
+
+func failedTerminalStateWithSummary(runArtifacts model.RunArtifacts, err error, summary string) terminalState {
 	return terminalState{
 		status:    runStatusFailed,
 		errorText: errorString(err),
 		kind:      eventspkg.EventKindRunFailed,
 		payload: kinds.RunFailedPayload{
-			ArtifactsDir: runArtifacts.RunDir,
-			Error:        errorString(err),
-			ResultPath:   runArtifacts.ResultPath,
+			ArtifactsDir:   runArtifacts.RunDir,
+			Error:          errorString(err),
+			ResultPath:     runArtifacts.ResultPath,
+			SummaryMessage: strings.TrimSpace(summary),
 		},
 	}
 }

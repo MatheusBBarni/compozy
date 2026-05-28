@@ -47,10 +47,11 @@ type RunCrashedPayload struct {
 
 // RunFailedPayload describes a failed run.
 type RunFailedPayload struct {
-	ArtifactsDir string `json:"artifacts_dir,omitempty"`
-	DurationMs   int64  `json:"duration_ms,omitempty"`
-	Error        string `json:"error,omitempty"`
-	ResultPath   string `json:"result_path,omitempty"`
+	ArtifactsDir   string `json:"artifacts_dir,omitempty"`
+	DurationMs     int64  `json:"duration_ms,omitempty"`
+	Error          string `json:"error,omitempty"`
+	ResultPath     string `json:"result_path,omitempty"`
+	SummaryMessage string `json:"summary_message,omitempty"`
 }
 
 // RunCancelledPayload describes a canceled run.

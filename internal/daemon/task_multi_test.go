@@ -451,6 +451,15 @@ func TestRunManagerParallelTaskRunMultipleAggregatesMixedChildOutcomes(t *testin
 	if !slices.Equal(gotStatuses, wantStatuses) {
 		t.Fatalf("summary display statuses = %#v, want %#v", gotStatuses, wantStatuses)
 	}
+	failedEvent := requireRunEvent(t, parent.RunID, eventspkg.EventKindRunFailed)
+	var failedPayload kinds.RunFailedPayload
+	if err := json.Unmarshal(failedEvent.Payload, &failedPayload); err != nil {
+		t.Fatalf("decode failed payload: %v", err)
+	}
+	if !strings.Contains(failedPayload.SummaryMessage, artifacts.ParallelHandoffPath) ||
+		!strings.Contains(failedPayload.SummaryMessage, "prompt:") {
+		t.Fatalf("failed summary missing handoff pointer/prompt:\n%s", failedPayload.SummaryMessage)
+	}
 }
 
 func TestRunManagerParallelTaskRunMultipleCancellationPreservesTerminalChildren(t *testing.T) {

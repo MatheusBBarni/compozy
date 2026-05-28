@@ -389,6 +389,8 @@ func (m *RunManager) executeTaskMultiRun(active *activeRun, row globaldb.Run) {
 	fallback = fallbackTerminalState(scope.RunArtifacts(), err, active.cancelWasRequested())
 	if err == nil {
 		fallback = completedTerminalState(scope.RunArtifacts(), handoff.SummaryLine)
+	} else if fallback.status == runStatusFailed && strings.TrimSpace(handoff.SummaryLine) != "" {
+		fallback = failedTerminalStateWithSummary(scope.RunArtifacts(), err, handoff.SummaryLine)
 	}
 	m.finishRun(active, row, fallback)
 }

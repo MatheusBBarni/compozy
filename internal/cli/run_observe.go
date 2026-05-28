@@ -699,10 +699,18 @@ func renderObservedRunFailed(event eventspkg.Event) string {
 	if !ok {
 		return "run failed\n"
 	}
-	if message := strings.TrimSpace(payload.Error); message != "" {
+	message := strings.TrimSpace(payload.Error)
+	summary := strings.TrimSpace(payload.SummaryMessage)
+	switch {
+	case message != "" && summary != "":
+		return fmt.Sprintf("run failed | %s\n%s\n", message, summary)
+	case message != "":
 		return fmt.Sprintf("run failed | %s\n", message)
+	case summary != "":
+		return fmt.Sprintf("run failed | %s\n", summary)
+	default:
+		return "run failed\n"
 	}
-	return "run failed\n"
 }
 
 func renderObservedRunCancelled(event eventspkg.Event) string {
