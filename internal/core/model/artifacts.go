@@ -14,14 +14,17 @@ import (
 const defaultRunID = "run"
 
 type RunArtifacts struct {
-	RunID       string
-	RunDir      string
-	RunDBPath   string
-	RunMetaPath string
-	EventsPath  string
-	TurnsDir    string
-	JobsDir     string
-	ResultPath  string
+	RunID                 string
+	RunDir                string
+	RunDBPath             string
+	RunMetaPath           string
+	EventsPath            string
+	TurnsDir              string
+	JobsDir               string
+	ResultPath            string
+	ParallelHandoffPath   string
+	ParallelSummaryPath   string
+	ParallelWorktreesPath string
 }
 
 type JobArtifacts struct {
@@ -38,14 +41,17 @@ func NewRunArtifactsForRunsDir(runsDir, runID string) RunArtifacts {
 	safeRunID := sanitizeRunID(runID)
 	runDir := filepath.Join(strings.TrimSpace(runsDir), safeRunID)
 	return RunArtifacts{
-		RunID:       safeRunID,
-		RunDir:      runDir,
-		RunDBPath:   layout.RunDBPath(runDir),
-		RunMetaPath: layout.RunMetaPath(runDir),
-		EventsPath:  layout.EventsLogPath(runDir),
-		TurnsDir:    layout.TurnsDir(runDir),
-		JobsDir:     layout.JobsDir(runDir),
-		ResultPath:  layout.ResultPath(runDir),
+		RunID:                 safeRunID,
+		RunDir:                runDir,
+		RunDBPath:             layout.RunDBPath(runDir),
+		RunMetaPath:           layout.RunMetaPath(runDir),
+		EventsPath:            layout.EventsLogPath(runDir),
+		TurnsDir:              layout.TurnsDir(runDir),
+		JobsDir:               layout.JobsDir(runDir),
+		ResultPath:            layout.ResultPath(runDir),
+		ParallelHandoffPath:   filepath.Join(runDir, "parallel-handoff.md"),
+		ParallelSummaryPath:   filepath.Join(runDir, "parallel-summary.json"),
+		ParallelWorktreesPath: filepath.Join(runDir, "parallel-worktrees.json"),
 	}
 }
 

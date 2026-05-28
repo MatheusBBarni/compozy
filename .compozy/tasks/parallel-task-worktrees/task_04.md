@@ -1,5 +1,5 @@
 ---
-status: pending
+status: completed
 title: Implement parallel parent-child orchestration for selected tasks
 type: backend
 complexity: critical
@@ -12,11 +12,14 @@ dependencies:
 
 ## Overview
 
-This task delivers the core parallel behavior. It adds the parent-child coordinator that launches one child run per selected task in its assigned worktree, preserves task order for visible tabs, and aggregates the parent run outcome from terminal child states.
+This is an execution-only task against an already approved design. The PRD, TechSpec, and ADRs already define the parent-child coordinator; implement that contract directly by wiring one child run per selected task and assigned worktree folder while preserving ordered tabs and parent aggregation.
 
 <critical>
 - ALWAYS READ the PRD and TechSpec before starting
 - REFERENCE TECHSPEC for implementation details — do not duplicate here
+- PRD AND TECHSPEC ARE ALREADY APPROVED — do not reopen design review
+- DO NOT INVOKE BRAINSTORMING OR CREATE NEW DESIGN DOCS — proceed directly to implementation and tests
+- MINIMIZE EXPLORATION — prefer direct reads of the listed files over spawning exploratory subagents unless blocked
 - FOCUS ON "WHAT" — describe what needs to be accomplished, not how
 - MINIMIZE CODE — show code only to illustrate current structure or problem areas
 - TESTS REQUIRED — every task MUST include tests in deliverables
@@ -30,14 +33,16 @@ This task delivers the core parallel behavior. It adds the parent-child coordina
 </requirements>
 
 ## Subtasks
-- [ ] 4.1 Extend the daemon task-run start path to branch into parent-child orchestration when multiple-mode is parallel.
-- [ ] 4.2 Launch exactly one child run per selected task, using that task’s assigned worktree folder and parent linkage.
-- [ ] 4.3 Aggregate terminal child outcomes into a stable parent run summary and snapshot model.
-- [ ] 4.4 Preserve ordered parent-child observation behavior for tabs, waits, and cancellation.
+- [x] 4.1 Extend the daemon task-run start path to branch into parent-child orchestration when multiple-mode is parallel.
+- [x] 4.2 Launch exactly one child run per selected task, using that task’s assigned worktree folder and parent linkage.
+- [x] 4.3 Aggregate terminal child outcomes into a stable parent run summary and snapshot model.
+- [x] 4.4 Preserve ordered parent-child observation behavior for tabs, waits, and cancellation.
 
 ## Implementation Details
 
 Reference the TechSpec sections "Parallel Task Coordinator", "Data Flow", and "Development Sequencing". Keep parallelism in daemon orchestration rather than inside the PRD task executor.
+
+Primary edit surface for this task should stay bounded to `internal/daemon/task_multi.go`, `internal/daemon/run_manager.go`, and the event/snapshot files already listed below unless tests prove another seam is required.
 
 ### Relevant Files
 - `internal/daemon/task_multi.go` — closest existing parent queue/orchestration pattern.
@@ -67,12 +72,12 @@ Reference the TechSpec sections "Parallel Task Coordinator", "Data Flow", and "D
 
 ## Tests
 - Unit tests:
-  - [ ] Parent coordination preserves request order when building child run state.
-  - [ ] Parent aggregation derives completed, failed, and canceled outcomes from child terminal states.
-  - [ ] Parent cancellation propagates correctly to running and queued child runs.
+  - [x] Parent coordination preserves request order when building child run state.
+  - [x] Parent aggregation derives completed, failed, and canceled outcomes from child terminal states.
+  - [x] Parent cancellation propagates correctly to running and queued child runs.
 - Integration tests:
-  - [ ] Parallel mode launches one child run per selected task with correct parent linkage.
-  - [ ] Mixed child outcomes produce the expected parent snapshot and terminal state.
+  - [x] Parallel mode launches one child run per selected task with correct parent linkage.
+  - [x] Mixed child outcomes produce the expected parent snapshot and terminal state.
 - Test coverage target: >=80%
 - All tests must pass
 

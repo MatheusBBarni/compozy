@@ -360,6 +360,26 @@ func TestResolveHomeRunArtifactsUsesHomeScopedRunDir(t *testing.T) {
 	}
 }
 
+func TestRunArtifactsParallelHandoffPaths(t *testing.T) {
+	t.Parallel()
+
+	runArtifacts := model.NewRunArtifactsForRunsDir("runs-root", "parent/run 01")
+	wantRunDir := filepath.Join("runs-root", "parent-run-01")
+	if got := runArtifacts.RunDir; got != wantRunDir {
+		t.Fatalf("run dir = %q, want %q", got, wantRunDir)
+	}
+	assertPath := func(name string, got string, file string) {
+		t.Helper()
+		want := filepath.Join(wantRunDir, file)
+		if got != want {
+			t.Fatalf("%s = %q, want %q", name, got, want)
+		}
+	}
+	assertPath("ParallelHandoffPath", runArtifacts.ParallelHandoffPath, "parallel-handoff.md")
+	assertPath("ParallelSummaryPath", runArtifacts.ParallelSummaryPath, "parallel-summary.json")
+	assertPath("ParallelWorktreesPath", runArtifacts.ParallelWorktreesPath, "parallel-worktrees.json")
+}
+
 func TestResolvePersistedRunArtifactsPrefersWorkspaceMetadata(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -158,6 +159,366 @@ func TestRunManagerParallelChildPreservesSourceWorkflowFiles(t *testing.T) {
 			DisplayStatus: taskMultiItemStatusCompleted,
 			RunID:         "child-daemon-workflow",
 		},
+	}
+	assertTaskMultiItems(t, snapshot.Items, wantItems)
+}
+
+func TestRunManagerParallelParentWritesHandoffArtifacts(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
+
+	parentRunID := "task-multi-handoff-artifacts"
+	env := newRunManagerTestEnv(t, runManagerTestDeps{
+		buildRunID: func(cfg *model.RuntimeConfig) (string, error) {
+			if cfg == nil {
+				return "", errors.New("runtime config is required")
+			}
+			if runID := strings.TrimSpace(cfg.RunID); runID != "" {
+				return runID, nil
+			}
+			if strings.TrimSpace(cfg.ParentRunID) == parentRunID && len(cfg.SelectedTasks) == 1 {
+				return "child-" + strings.TrimSpace(cfg.SelectedTasks[0]), nil
+			}
+			return "generated-" + strings.TrimSpace(cfg.Name), nil
+		},
+		prepare: func(context.Context, *model.RuntimeConfig, model.RunScope) (*model.SolvePreparation, error) {
+			return &model.SolvePreparation{}, nil
+		},
+		execute: func(_ context.Context, _ *model.SolvePreparation, cfg *model.RuntimeConfig) error {
+			return os.WriteFile(
+				filepath.Join(cfg.WorkspaceRoot, "output-"+cfg.SelectedTasks[0]+".txt"),
+				[]byte("child output"),
+				0o600,
+			)
+		},
+	})
+	taskOnePath := env.writeWorkflowFile(t, env.workflowSlug, "task_01.md", daemonTaskBody("pending", "Task one"))
+	taskTwoPath := env.writeWorkflowFile(t, env.workflowSlug, "task_02.md", daemonTaskBody("pending", "Task two"))
+	sourceBefore := readFilesByPath(t, taskOnePath, taskTwoPath)
+	initAndCommitTaskMultiWorkspace(t, env.workspaceRoot)
+
+	parent, err := env.manager.StartTaskRunMultiple(
+		context.Background(),
+		env.workspaceRoot,
+		apicore.TaskRunMultipleRequest{
+			Workspace:        env.workspaceRoot,
+			WorkflowSlug:     env.workflowSlug,
+			SelectedTasks:    []string{"task_01", "task_02"},
+			Mode:             "parallel",
+			PresentationMode: defaultPresentationMode,
+			RuntimeOverrides: rawJSON(t, fmt.Sprintf(`{"run_id":%q}`, parentRunID)),
+		},
+	)
+	if err != nil {
+		t.Fatalf("StartTaskRunMultiple(parallel) error = %v", err)
+	}
+	waitForRun(t, env.globalDB, parent.RunID, func(row globaldb.Run) bool {
+		return row.Status == runStatusCompleted
+	})
+	assertFilesEqual(t, sourceBefore, taskOnePath, taskTwoPath)
+
+	artifacts, err := model.ResolveHomeRunArtifacts(parent.RunID)
+	if err != nil {
+		t.Fatalf("ResolveHomeRunArtifacts() error = %v", err)
+	}
+	var summary taskMultiParentSummary
+	readJSONFile(t, artifacts.ParallelSummaryPath, &summary)
+	if summary.WorkflowSlug != env.workflowSlug || summary.MultipleMode != "parallel" {
+		t.Fatalf("summary identity = %#v", summary)
+	}
+	if !slices.Equal(summary.SelectedTasks, []string{"task_01", "task_02"}) {
+		t.Fatalf("summary selected tasks = %#v", summary.SelectedTasks)
+	}
+	if len(summary.ChildOutcomes) != 2 {
+		t.Fatalf("child outcomes = %#v", summary.ChildOutcomes)
+	}
+	for _, outcome := range summary.ChildOutcomes {
+		if outcome.ChildRunID == "" || outcome.WorktreePath == "" || outcome.BranchName == "" {
+			t.Fatalf("incomplete child outcome: %#v", outcome)
+		}
+		if outcome.RunStatus != runStatusCompleted || outcome.DisplayStatus != taskMultiItemStatusCompleted {
+			t.Fatalf("unexpected outcome status: %#v", outcome)
+		}
+		if !outcome.ChangedWorkspace {
+			t.Fatalf("ChangedWorkspace = false for changed child outcome: %#v", outcome)
+		}
+	}
+	var manifest TaskMultiWorktreeManifest
+	readJSONFile(t, artifacts.ParallelWorktreesPath, &manifest)
+	if len(manifest.Worktrees) != 2 {
+		t.Fatalf("manifest worktrees = %#v", manifest.Worktrees)
+	}
+	for _, metadata := range manifest.Worktrees {
+		if metadata.TaskName == "" || metadata.ChildRunID == "" || metadata.WorktreePath == "" {
+			t.Fatalf("incomplete worktree metadata: %#v", metadata)
+		}
+		if strings.HasPrefix(metadata.WorktreePath, env.workspaceRoot) {
+			t.Fatalf("worktree path %q is inside source workspace %q", metadata.WorktreePath, env.workspaceRoot)
+		}
+	}
+	handoffBytes, err := os.ReadFile(artifacts.ParallelHandoffPath)
+	if err != nil {
+		t.Fatalf("read handoff artifact: %v", err)
+	}
+	handoff := string(handoffBytes)
+	if !strings.Contains(handoff, "Review the retained parallel task worktrees") ||
+		!strings.Contains(handoff, "task_01") ||
+		!strings.Contains(handoff, "task_02") {
+		t.Fatalf("handoff artifact missing expected prompt content:\n%s", handoff)
+	}
+	completedEvent := requireRunEvent(t, parent.RunID, eventspkg.EventKindRunCompleted)
+	var payload kinds.RunCompletedPayload
+	if err := json.Unmarshal(completedEvent.Payload, &payload); err != nil {
+		t.Fatalf("decode completed payload: %v", err)
+	}
+	if !strings.Contains(payload.SummaryMessage, artifacts.ParallelHandoffPath) ||
+		!strings.Contains(payload.SummaryMessage, "prompt:") {
+		t.Fatalf("summary message missing handoff pointer/prompt:\n%s", payload.SummaryMessage)
+	}
+}
+
+func TestRunManagerParallelTaskRunMultipleLaunchesOneChildPerSelectedTask(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
+
+	parentRunID := "task-multi-parallel-launch"
+	started := make(chan string, 2)
+	releaseFirst := make(chan struct{})
+	env := newRunManagerTestEnv(t, runManagerTestDeps{
+		buildRunID: selectedTaskRunIDBuilder(parentRunID),
+		prepare: func(context.Context, *model.RuntimeConfig, model.RunScope) (*model.SolvePreparation, error) {
+			return &model.SolvePreparation{}, nil
+		},
+		execute: func(ctx context.Context, _ *model.SolvePreparation, cfg *model.RuntimeConfig) error {
+			taskName := cfg.SelectedTasks[0]
+			started <- taskName + ":" + cfg.RunID
+			if taskName == "task_01" {
+				select {
+				case <-releaseFirst:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			return nil
+		},
+	})
+	env.writeWorkflowFile(t, env.workflowSlug, "task_01.md", daemonTaskBody("pending", "Task one"))
+	env.writeWorkflowFile(t, env.workflowSlug, "task_02.md", daemonTaskBody("pending", "Task two"))
+	initAndCommitTaskMultiWorkspace(t, env.workspaceRoot)
+
+	parent, err := env.manager.StartTaskRunMultiple(
+		context.Background(),
+		env.workspaceRoot,
+		apicore.TaskRunMultipleRequest{
+			Workspace:        env.workspaceRoot,
+			WorkflowSlug:     env.workflowSlug,
+			SelectedTasks:    []string{"task_01", "task_02"},
+			Mode:             "parallel",
+			PresentationMode: defaultPresentationMode,
+			RuntimeOverrides: rawJSON(t, fmt.Sprintf(`{"run_id":%q}`, parentRunID)),
+		},
+	)
+	if err != nil {
+		t.Fatalf("StartTaskRunMultiple(parallel) error = %v", err)
+	}
+	waitForString(t, started, "task_01:child-task_01")
+	waitForString(t, started, "task_02:child-task_02")
+	waitForRun(t, env.globalDB, "child-task_02", func(row globaldb.Run) bool {
+		return row.Status == runStatusCompleted
+	})
+	waitForCondition(t, 5*time.Second, "parent snapshot to observe out-of-order child completion", func() bool {
+		snapshot, snapshotErr := env.manager.RunMultipleSnapshot(context.Background(), parent.RunID)
+		if snapshotErr != nil || len(snapshot.Items) != 2 {
+			return false
+		}
+		return snapshot.Items[0].Status == taskMultiItemStatusRunning &&
+			snapshot.Items[1].Status == taskMultiItemStatusCompleted
+	})
+	close(releaseFirst)
+
+	waitForRun(t, env.globalDB, parent.RunID, func(row globaldb.Run) bool {
+		return row.Status == runStatusCompleted
+	})
+	requireTaskMultiChildRow(t, env, "child-task_01", parent.RunID, runStatusCompleted)
+	requireTaskMultiChildRow(t, env, "child-task_02", parent.RunID, runStatusCompleted)
+	snapshot, err := env.manager.RunMultipleSnapshot(context.Background(), parent.RunID)
+	if err != nil {
+		t.Fatalf("RunMultipleSnapshot() error = %v", err)
+	}
+	wantItems := []apicore.TaskRunMultipleItem{
+		{Slug: "task_01", SelectedTask: "task_01", Status: taskMultiItemStatusCompleted, RunID: "child-task_01"},
+		{Slug: "task_02", SelectedTask: "task_02", Status: taskMultiItemStatusCompleted, RunID: "child-task_02"},
+	}
+	assertTaskMultiItems(t, snapshot.Items, wantItems)
+}
+
+func TestRunManagerParallelTaskRunMultipleAggregatesMixedChildOutcomes(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
+
+	parentRunID := "task-multi-parallel-mixed"
+	env := newRunManagerTestEnv(t, runManagerTestDeps{
+		buildRunID: selectedTaskRunIDBuilder(parentRunID),
+		prepare: func(context.Context, *model.RuntimeConfig, model.RunScope) (*model.SolvePreparation, error) {
+			return &model.SolvePreparation{}, nil
+		},
+		execute: func(_ context.Context, _ *model.SolvePreparation, cfg *model.RuntimeConfig) error {
+			if cfg.SelectedTasks[0] == "task_02" {
+				return errors.New("task_02 failed")
+			}
+			return os.WriteFile(
+				filepath.Join(cfg.WorkspaceRoot, "output-"+cfg.SelectedTasks[0]+".txt"),
+				[]byte("child output"),
+				0o600,
+			)
+		},
+	})
+	env.writeWorkflowFile(t, env.workflowSlug, "task_01.md", daemonTaskBody("pending", "Task one"))
+	env.writeWorkflowFile(t, env.workflowSlug, "task_02.md", daemonTaskBody("pending", "Task two"))
+	env.writeWorkflowFile(t, env.workflowSlug, "task_03.md", daemonTaskBody("pending", "Task three"))
+	initAndCommitTaskMultiWorkspace(t, env.workspaceRoot)
+
+	parent, err := env.manager.StartTaskRunMultiple(
+		context.Background(),
+		env.workspaceRoot,
+		apicore.TaskRunMultipleRequest{
+			Workspace:        env.workspaceRoot,
+			WorkflowSlug:     env.workflowSlug,
+			SelectedTasks:    []string{"task_01", "task_02", "task_03"},
+			Mode:             "parallel",
+			PresentationMode: defaultPresentationMode,
+			RuntimeOverrides: rawJSON(t, fmt.Sprintf(`{"run_id":%q}`, parentRunID)),
+		},
+	)
+	if err != nil {
+		t.Fatalf("StartTaskRunMultiple(parallel) error = %v", err)
+	}
+	parentRow := waitForRun(t, env.globalDB, parent.RunID, func(row globaldb.Run) bool {
+		return row.Status == runStatusFailed
+	})
+	if !strings.Contains(parentRow.ErrorText, "task_02 failed") {
+		t.Fatalf("parent error = %q, want failed child error", parentRow.ErrorText)
+	}
+	requireTaskMultiChildRow(t, env, "child-task_01", parent.RunID, runStatusCompleted)
+	requireTaskMultiChildRow(t, env, "child-task_02", parent.RunID, runStatusFailed)
+	requireTaskMultiChildRow(t, env, "child-task_03", parent.RunID, runStatusCompleted)
+
+	snapshot, err := env.manager.RunMultipleSnapshot(context.Background(), parent.RunID)
+	if err != nil {
+		t.Fatalf("RunMultipleSnapshot() error = %v", err)
+	}
+	wantItems := []apicore.TaskRunMultipleItem{
+		{
+			Slug:          "task_01",
+			SelectedTask:  "task_01",
+			Status:        taskMultiItemStatusCompleted,
+			DisplayStatus: taskMultiItemStatusCompleted,
+			RunID:         "child-task_01",
+		},
+		{
+			Slug:          "task_02",
+			SelectedTask:  "task_02",
+			Status:        taskMultiItemStatusFailed,
+			DisplayStatus: taskMultiItemStatusFailed,
+			RunID:         "child-task_02",
+			ErrorText:     "task_02 failed",
+		},
+		{
+			Slug:          "task_03",
+			SelectedTask:  "task_03",
+			Status:        taskMultiItemStatusCompleted,
+			DisplayStatus: taskMultiItemStatusCompleted,
+			RunID:         "child-task_03",
+		},
+	}
+	assertTaskMultiItems(t, snapshot.Items, wantItems)
+
+	artifacts, err := model.ResolveHomeRunArtifacts(parent.RunID)
+	if err != nil {
+		t.Fatalf("ResolveHomeRunArtifacts() error = %v", err)
+	}
+	var summary taskMultiParentSummary
+	readJSONFile(t, artifacts.ParallelSummaryPath, &summary)
+	gotStatuses := make([]string, 0, len(summary.ChildOutcomes))
+	for _, outcome := range summary.ChildOutcomes {
+		gotStatuses = append(gotStatuses, outcome.DisplayStatus)
+	}
+	wantStatuses := []string{taskMultiItemStatusCompleted, taskMultiItemStatusFailed, taskMultiItemStatusCompleted}
+	if !slices.Equal(gotStatuses, wantStatuses) {
+		t.Fatalf("summary display statuses = %#v, want %#v", gotStatuses, wantStatuses)
+	}
+}
+
+func TestRunManagerParallelTaskRunMultipleCancellationPreservesTerminalChildren(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
+
+	parentRunID := "task-multi-parallel-cancel"
+	started := make(chan string, 2)
+	env := newRunManagerTestEnv(t, runManagerTestDeps{
+		buildRunID: selectedTaskRunIDBuilder(parentRunID),
+		prepare: func(context.Context, *model.RuntimeConfig, model.RunScope) (*model.SolvePreparation, error) {
+			return &model.SolvePreparation{}, nil
+		},
+		execute: func(ctx context.Context, _ *model.SolvePreparation, cfg *model.RuntimeConfig) error {
+			taskName := cfg.SelectedTasks[0]
+			started <- taskName + ":" + cfg.RunID
+			if taskName == "task_02" {
+				return nil
+			}
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	})
+	env.writeWorkflowFile(t, env.workflowSlug, "task_01.md", daemonTaskBody("pending", "Task one"))
+	env.writeWorkflowFile(t, env.workflowSlug, "task_02.md", daemonTaskBody("pending", "Task two"))
+	initAndCommitTaskMultiWorkspace(t, env.workspaceRoot)
+
+	parent, err := env.manager.StartTaskRunMultiple(
+		context.Background(),
+		env.workspaceRoot,
+		apicore.TaskRunMultipleRequest{
+			Workspace:        env.workspaceRoot,
+			WorkflowSlug:     env.workflowSlug,
+			SelectedTasks:    []string{"task_01", "task_02"},
+			Mode:             "parallel",
+			PresentationMode: defaultPresentationMode,
+			RuntimeOverrides: rawJSON(t, fmt.Sprintf(`{"run_id":%q}`, parentRunID)),
+		},
+	)
+	if err != nil {
+		t.Fatalf("StartTaskRunMultiple(parallel) error = %v", err)
+	}
+	waitForString(t, started, "task_01:child-task_01")
+	waitForString(t, started, "task_02:child-task_02")
+	waitForRun(
+		t,
+		env.globalDB,
+		"child-task_02",
+		func(row globaldb.Run) bool { return row.Status == runStatusCompleted },
+	)
+	if err := env.manager.Cancel(context.Background(), parent.RunID); err != nil {
+		t.Fatalf("Cancel(parent) error = %v", err)
+	}
+	waitForRun(
+		t,
+		env.globalDB,
+		"child-task_01",
+		func(row globaldb.Run) bool { return row.Status == runStatusCancelled },
+	)
+	waitForRun(t, env.globalDB, parent.RunID, func(row globaldb.Run) bool { return row.Status == runStatusCancelled })
+	snapshot, err := env.manager.RunMultipleSnapshot(context.Background(), parent.RunID)
+	if err != nil {
+		t.Fatalf("RunMultipleSnapshot() error = %v", err)
+	}
+	wantItems := []apicore.TaskRunMultipleItem{
+		{Slug: "task_01", SelectedTask: "task_01", Status: taskMultiItemStatusCanceled, RunID: "child-task_01"},
+		{Slug: "task_02", SelectedTask: "task_02", Status: taskMultiItemStatusCompleted, RunID: "child-task_02"},
 	}
 	assertTaskMultiItems(t, snapshot.Items, wantItems)
 }
@@ -772,6 +1133,21 @@ func taskMultiRunIDBuilder(parentRunID string) func(*model.RuntimeConfig) (strin
 	}
 }
 
+func selectedTaskRunIDBuilder(parentRunID string) func(*model.RuntimeConfig) (string, error) {
+	return func(cfg *model.RuntimeConfig) (string, error) {
+		if cfg == nil {
+			return "", errors.New("runtime config is required")
+		}
+		if runID := strings.TrimSpace(cfg.RunID); runID != "" {
+			return runID, nil
+		}
+		if strings.TrimSpace(cfg.ParentRunID) == parentRunID && len(cfg.SelectedTasks) == 1 {
+			return "child-" + strings.TrimSpace(cfg.SelectedTasks[0]), nil
+		}
+		return "generated-" + strings.TrimSpace(cfg.Name), nil
+	}
+}
+
 func initAndCommitTaskMultiWorkspace(t *testing.T, workspaceRoot string) {
 	t.Helper()
 	runGitOutput(t, workspaceRoot, "init", "--initial-branch=main")
@@ -810,6 +1186,17 @@ func assertFilesEqual(t *testing.T, want map[string]string, paths ...string) {
 				string(content),
 			)
 		}
+	}
+}
+
+func readJSONFile(t *testing.T, path string, target any) {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if err := json.Unmarshal(content, target); err != nil {
+		t.Fatalf("decode %s: %v\n%s", path, err, string(content))
 	}
 }
 

@@ -7,6 +7,7 @@ Keep only durable, cross-task context here. Do not duplicate facts that are obvi
 - Task 01 is complete and verified. The baseline contract now represents selected task IDs and multi-run mode as first-class fields across config, CLI, API/client, runtime config, daemon event/snapshot payloads, OpenAPI, generated web types, and docs.
 - Task 02 is implemented and verified. Workflow-scoped `--multiple` in effective sequential mode now reuses the normal task-run path with explicit selected-task validation and caller-order preservation.
 - Task 03 is implemented and verified. Parallel mode now provisions retained daemon-home git worktrees before child launch and exposes per-task worktree metadata on prepared multi-run state.
+- Task 04 is implemented and verified. Parallel selected-task runs now use daemon parent-child orchestration: all selected child runs launch against their assigned retained worktrees, parent events observe child terminal states as they arrive, and final snapshots/summaries remain selected-task ordered.
 - Task 05 is implemented and verified. Parallel child task runs now defer workflow task-file reconciliation, skip daemon workflow sync/watch setup, and report parent-facing display outcomes separately from child run lifecycle status.
 
 ## Shared Decisions
@@ -17,6 +18,7 @@ Keep only durable, cross-task context here. Do not duplicate facts that are obvi
 - Selected-task validation/order is centralized through `internal/core/tasks.SelectTaskEntries`; future planner/daemon/parallel code should reuse it rather than reimplement selector matching.
 - Retained parallel worktrees live under the daemon home cache (`.compozy/cache/task-worktrees/...`) and are intentionally left for later inspection/fan-in.
 - Parallel child run truth is two-phase: child lifecycle `status` reports execution completion/failure/cancelation, while parent-facing `display_status` can report `unchanged` when git snapshot evidence shows no workspace changes.
+- Parent cancellation must not overwrite child truth: future parent/observer changes should preserve any child run that is already terminal instead of replacing it with a coordinator-level canceled item state.
 
 ## Shared Learnings
 
@@ -26,6 +28,6 @@ Keep only durable, cross-task context here. Do not duplicate facts that are obvi
 
 ## Open Risks
 
-- True concurrent child launch and handoff artifact writing remain deferred to later tasks.
+- Handoff artifact writing remains part of later task surfaces even though current branch already has some artifact path plumbing.
 
 ## Handoffs

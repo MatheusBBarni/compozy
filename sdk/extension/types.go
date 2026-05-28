@@ -557,14 +557,17 @@ type RuntimeConfig struct {
 
 // RunArtifacts mirrors the run artifact directory layout exposed to run hooks.
 type RunArtifacts struct {
-	RunID       string
-	RunDir      string
-	RunDBPath   string
-	RunMetaPath string
-	EventsPath  string
-	TurnsDir    string
-	JobsDir     string
-	ResultPath  string
+	RunID                 string
+	RunDir                string
+	RunDBPath             string
+	RunMetaPath           string
+	EventsPath            string
+	TurnsDir              string
+	JobsDir               string
+	ResultPath            string
+	ParallelHandoffPath   string
+	ParallelSummaryPath   string
+	ParallelWorktreesPath string
 }
 
 // RunSummary mirrors the terminal run summary payload.

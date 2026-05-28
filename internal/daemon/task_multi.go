@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	apicore "github.com/compozy/compozy/internal/api/core"
@@ -30,6 +32,49 @@ const (
 
 	taskMultiChildPollInterval = 100 * time.Millisecond
 )
+
+type taskMultiHandoffArtifacts struct {
+	HandoffPath  string
+	SummaryPath  string
+	WorktreePath string
+	Prompt       string
+	SummaryLine  string
+}
+
+type taskMultiParentSummary struct {
+	WorkflowSlug         string                  `json:"workflow_slug"`
+	MultipleMode         string                  `json:"multiple_mode"`
+	SelectedTasks        []string                `json:"selected_tasks"`
+	SourceWorkspaceRoot  string                  `json:"source_workspace_root"`
+	ChildOutcomes        []taskMultiChildOutcome `json:"child_outcomes"`
+	HandoffPromptPath    string                  `json:"handoff_prompt_path"`
+	SummaryPath          string                  `json:"summary_path"`
+	WorktreeManifestPath string                  `json:"worktree_manifest_path"`
+}
+
+type taskMultiChildOutcome struct {
+	TaskName         string `json:"task_name"`
+	ChildRunID       string `json:"child_run_id"`
+	WorktreePath     string `json:"worktree_path"`
+	RunStatus        string `json:"run_status"`
+	DisplayStatus    string `json:"display_status"`
+	ChangedWorkspace bool   `json:"changed_workspace"`
+	HeadRef          string `json:"head_ref"`
+	BranchName       string `json:"branch_name"`
+}
+
+type taskMultiChildLaunch struct {
+	item   preparedTaskMultiItem
+	index  int
+	runID  string
+	active bool
+}
+
+type taskMultiChildResult struct {
+	launch taskMultiChildLaunch
+	row    globaldb.Run
+	err    error
+}
 
 type preparedTaskMulti struct {
 	workspace        globaldb.Workspace
@@ -340,23 +385,23 @@ func (m *RunManager) executeTaskMultiRun(active *activeRun, row globaldb.Run) {
 	row = updated
 	m.publishRunWorkspaceEvent(active.ctx, row, active.workflowSlug, apicore.WorkspaceEventKindRunStatusChanged)
 
-	err = m.runTaskMultiCoordinator(active)
+	handoff, err := m.runTaskMultiCoordinator(active)
 	fallback = fallbackTerminalState(scope.RunArtifacts(), err, active.cancelWasRequested())
 	if err == nil {
-		fallback = completedTerminalState(scope.RunArtifacts(), "multi-task queue completed")
+		fallback = completedTerminalState(scope.RunArtifacts(), handoff.SummaryLine)
 	}
 	m.finishRun(active, row, fallback)
 }
 
-func (m *RunManager) runTaskMultiCoordinator(active *activeRun) error {
+func (m *RunManager) runTaskMultiCoordinator(active *activeRun) (taskMultiHandoffArtifacts, error) {
 	if active == nil || active.taskMulti == nil {
-		return errors.New("task multi run is not configured")
+		return taskMultiHandoffArtifacts{}, errors.New("task multi run is not configured")
 	}
 	prepared := active.taskMulti
 	total := len(prepared.items)
 	if prepared.mode == workspacecfg.TaskRunMultipleModeParallel {
 		if err := m.provisionTaskMultiWorktrees(active, prepared); err != nil {
-			return err
+			return taskMultiHandoffArtifacts{}, err
 		}
 	}
 	if err := m.emitTaskMultiEvent(active, eventspkg.EventKindTaskRunMultipleStarted, kinds.TaskRunMultiplePayload{
@@ -365,7 +410,7 @@ func (m *RunManager) runTaskMultiCoordinator(active *activeRun) error {
 		Slugs:  preparedTaskMultiSlugs(prepared.items),
 		Total:  total,
 	}); err != nil {
-		return err
+		return taskMultiHandoffArtifacts{}, err
 	}
 	for idx := range prepared.items {
 		item := prepared.items[idx]
@@ -380,27 +425,300 @@ func (m *RunManager) runTaskMultiCoordinator(active *activeRun) error {
 			"",
 			"",
 		); err != nil {
-			return err
+			return taskMultiHandoffArtifacts{}, err
 		}
+	}
+	if prepared.mode == workspacecfg.TaskRunMultipleModeParallel {
+		return m.runTaskMultiParallelChildren(active, prepared, total)
 	}
 	for idx := range prepared.items {
 		item := prepared.items[idx]
 		if err := context.Cause(active.ctx); err != nil {
 			if emitErr := m.cancelTaskMultiQueuedItems(active, prepared.items, idx, total, err); emitErr != nil {
-				return errors.Join(err, emitErr)
+				return taskMultiHandoffArtifacts{}, errors.Join(err, emitErr)
 			}
-			return err
+			return taskMultiHandoffArtifacts{}, err
 		}
 		if err := m.runTaskMultiChildAt(active, prepared, item, idx, total); err != nil {
-			return err
+			return taskMultiHandoffArtifacts{}, err
 		}
 	}
-	return m.emitTaskMultiEvent(active, eventspkg.EventKindTaskRunMultipleQueueCompleted, kinds.TaskRunMultiplePayload{
-		Mode:   prepared.mode,
-		Status: runStatusCompleted,
-		Slugs:  preparedTaskMultiSlugs(prepared.items),
-		Total:  total,
-	})
+	if err := m.emitTaskMultiEvent(
+		active,
+		eventspkg.EventKindTaskRunMultipleQueueCompleted,
+		kinds.TaskRunMultiplePayload{
+			Mode:   prepared.mode,
+			Status: runStatusCompleted,
+			Slugs:  preparedTaskMultiSlugs(prepared.items),
+			Total:  total,
+		},
+	); err != nil {
+		return taskMultiHandoffArtifacts{}, err
+	}
+	return taskMultiHandoffArtifacts{SummaryLine: "multi-task queue completed"}, nil
+}
+
+func (m *RunManager) runTaskMultiParallelChildren(
+	active *activeRun,
+	prepared *preparedTaskMulti,
+	total int,
+) (taskMultiHandoffArtifacts, error) {
+	launches, err := m.launchTaskMultiParallelChildren(active, prepared, total)
+	if err != nil {
+		return taskMultiHandoffArtifacts{}, err
+	}
+	aborted, terminalErr := m.waitForTaskMultiParallelChildren(active, prepared, launches, total)
+	if aborted {
+		return taskMultiHandoffArtifacts{}, terminalErr
+	}
+
+	handoff, handoffErr := m.writeTaskMultiHandoffArtifacts(active, prepared)
+	if handoffErr != nil {
+		return taskMultiHandoffArtifacts{}, errors.Join(terminalErr, handoffErr)
+	}
+	if terminalErr != nil {
+		return handoff, terminalErr
+	}
+	if err := m.emitTaskMultiEvent(
+		active,
+		eventspkg.EventKindTaskRunMultipleQueueCompleted,
+		kinds.TaskRunMultiplePayload{
+			Mode:   prepared.mode,
+			Status: runStatusCompleted,
+			Slugs:  preparedTaskMultiSlugs(prepared.items),
+			Total:  total,
+		},
+	); err != nil {
+		return taskMultiHandoffArtifacts{}, err
+	}
+	return handoff, nil
+}
+
+func (m *RunManager) launchTaskMultiParallelChildren(
+	active *activeRun,
+	prepared *preparedTaskMulti,
+	total int,
+) ([]taskMultiChildLaunch, error) {
+	launches := make([]taskMultiChildLaunch, len(prepared.items))
+	for idx := range prepared.items {
+		item := prepared.items[idx]
+		if err := context.Cause(active.ctx); err != nil {
+			cancelErr := m.cancelTaskMultiParallelOutstanding(active, prepared.items, launches, nil, err)
+			return nil, errors.Join(err, cancelErr)
+		}
+		childRun, err := m.startTaskMultiChild(active, prepared, item, idx, total)
+		if err != nil {
+			emitErr := m.emitTaskMultiItemEvent(
+				active,
+				eventspkg.EventKindTaskRunMultipleChildFailed,
+				item,
+				idx,
+				total,
+				taskMultiItemStatusFailed,
+				"",
+				"",
+				err.Error(),
+			)
+			cancelErr := m.cancelTaskMultiParallelOutstanding(
+				active,
+				prepared.items,
+				launches,
+				map[int]struct{}{idx: {}},
+				err,
+			)
+			return nil, errors.Join(err, emitErr, cancelErr)
+		}
+		updateTaskMultiWorktreeChildRunID(prepared, item, childRun.RunID)
+		launches[idx] = taskMultiChildLaunch{item: item, index: idx, runID: childRun.RunID, active: true}
+	}
+	return launches, nil
+}
+
+func (m *RunManager) waitForTaskMultiParallelChildren(
+	active *activeRun,
+	prepared *preparedTaskMulti,
+	launches []taskMultiChildLaunch,
+	total int,
+) (bool, error) {
+	finalized := make(map[int]struct{}, len(launches))
+	results := make(chan taskMultiChildResult, len(launches))
+	var waits sync.WaitGroup
+	for idx := range launches {
+		launch := launches[idx]
+		waits.Add(1)
+		go func(launch taskMultiChildLaunch) {
+			defer waits.Done()
+			childRow, err := m.waitForTaskMultiChild(active.ctx, launch.runID)
+			results <- taskMultiChildResult{launch: launch, row: childRow, err: err}
+		}(launch)
+	}
+
+	var terminalErr error
+	aborted := false
+	for range launches {
+		result := <-results
+		if aborted {
+			if _, ok := finalized[result.launch.index]; ok {
+				continue
+			}
+			if result.err != nil {
+				finished, finishErr := m.finishTaskMultiTerminalChildIfAvailable(
+					active,
+					result.launch,
+					total,
+					finalized,
+				)
+				if finished {
+					terminalErr = errors.Join(terminalErr, finishErr)
+				}
+				continue
+			}
+			terminalErr = errors.Join(
+				terminalErr,
+				m.finishTaskMultiFinishedChild(active, result.launch, total, result.row, finalized),
+				taskMultiChildTerminalError(result.launch, result.row),
+			)
+			continue
+		}
+		if result.err != nil {
+			finished, finishErr := m.finishTaskMultiTerminalChildIfAvailable(active, result.launch, total, finalized)
+			if finished {
+				terminalErr = errors.Join(terminalErr, finishErr)
+				continue
+			}
+			cancelErr := m.cancelTaskMultiParallelOutstanding(active, prepared.items, launches, finalized, result.err)
+			terminalErr = errors.Join(result.err, cancelErr)
+			aborted = true
+			continue
+		}
+		if err := m.finishTaskMultiFinishedChild(active, result.launch, total, result.row, finalized); err != nil {
+			cancelErr := m.cancelTaskMultiParallelOutstanding(active, prepared.items, launches, finalized, err)
+			terminalErr = errors.Join(err, cancelErr)
+			aborted = true
+			continue
+		}
+		terminalErr = errors.Join(terminalErr, taskMultiChildTerminalError(result.launch, result.row))
+	}
+	waits.Wait()
+	if aborted {
+		return true, terminalErr
+	}
+	return false, terminalErr
+}
+
+func (m *RunManager) finishTaskMultiTerminalChildIfAvailable(
+	active *activeRun,
+	launch taskMultiChildLaunch,
+	total int,
+	finalized map[int]struct{},
+) (bool, error) {
+	childRow, err := m.globalDB.GetRun(detachContext(active.ctx), launch.runID)
+	if err != nil || !isTerminalRunStatus(childRow.Status) {
+		return false, nil
+	}
+	return true, errors.Join(
+		m.finishTaskMultiFinishedChild(active, launch, total, childRow, finalized),
+		taskMultiChildTerminalError(launch, childRow),
+	)
+}
+
+func (m *RunManager) finishTaskMultiFinishedChild(
+	active *activeRun,
+	launch taskMultiChildLaunch,
+	total int,
+	childRow globaldb.Run,
+	finalized map[int]struct{},
+) error {
+	finalized[launch.index] = struct{}{}
+	return m.finishTaskMultiChild(active, launch.item, launch.index, total, childRow)
+}
+
+func taskMultiChildTerminalError(launch taskMultiChildLaunch, childRow globaldb.Run) error {
+	switch childRow.Status {
+	case runStatusCompleted:
+		return nil
+	case runStatusCancelled:
+		return fmt.Errorf(
+			"task multi child run %s for %s was canceled: %s",
+			childRow.RunID,
+			launch.item.slug,
+			childRow.ErrorText,
+		)
+	default:
+		return fmt.Errorf(
+			"task multi child run %s for %s ended with status %s: %s",
+			childRow.RunID,
+			launch.item.slug,
+			childRow.Status,
+			childRow.ErrorText,
+		)
+	}
+}
+
+func (m *RunManager) cancelTaskMultiParallelOutstanding(
+	active *activeRun,
+	items []preparedTaskMultiItem,
+	launches []taskMultiChildLaunch,
+	finalized map[int]struct{},
+	cause error,
+) error {
+	if finalized == nil {
+		finalized = make(map[int]struct{})
+	}
+	var joined error
+	for idx := range launches {
+		launch := launches[idx]
+		if !launch.active {
+			continue
+		}
+		if _, ok := finalized[launch.index]; ok {
+			continue
+		}
+		childRow, err := m.globalDB.GetRun(detachContext(active.ctx), launch.runID)
+		if err == nil && isTerminalRunStatus(childRow.Status) {
+			joined = errors.Join(
+				joined,
+				m.finishTaskMultiChild(active, launch.item, launch.index, len(items), childRow),
+			)
+			finalized[launch.index] = struct{}{}
+			continue
+		}
+		joined = errors.Join(joined, m.Cancel(detachContext(active.ctx), launch.runID))
+	}
+	for idx := range items {
+		if _, ok := finalized[idx]; ok {
+			continue
+		}
+		joined = errors.Join(joined, m.emitTaskMultiItemEvent(
+			active,
+			eventspkg.EventKindTaskRunMultipleItemCanceled,
+			items[idx],
+			idx,
+			len(items),
+			taskMultiItemStatusCanceled,
+			"",
+			launchesRunIDAt(launches, idx),
+			errorString(cause),
+		))
+	}
+	joined = errors.Join(
+		joined,
+		m.emitTaskMultiEvent(active, eventspkg.EventKindTaskRunMultipleQueueCanceled, kinds.TaskRunMultiplePayload{
+			Mode:   active.taskMulti.mode,
+			Status: taskMultiItemStatusCanceled,
+			Slugs:  preparedTaskMultiSlugs(items),
+			Total:  len(items),
+			Error:  errorString(cause),
+		}),
+	)
+	return joined
+}
+
+func launchesRunIDAt(launches []taskMultiChildLaunch, index int) string {
+	if index < 0 || index >= len(launches) || !launches[index].active {
+		return ""
+	}
+	return launches[index].runID
 }
 
 func (m *RunManager) provisionTaskMultiWorktrees(active *activeRun, prepared *preparedTaskMulti) error {
@@ -524,6 +842,7 @@ func (m *RunManager) runTaskMultiChildAt(
 		cancelErr := m.cancelTaskMultiQueuedItems(active, prepared.items, index+1, total, err)
 		return errors.Join(err, emitErr, cancelErr)
 	}
+	updateTaskMultiWorktreeChildRunID(prepared, item, childRun.RunID)
 	childRow, err := m.waitForTaskMultiChild(active.ctx, childRun.RunID)
 	if err != nil {
 		var childCancelErr error
@@ -571,6 +890,25 @@ func (m *RunManager) runTaskMultiChildAt(
 		return errors.Join(childErr, emitErr)
 	}
 	return childErr
+}
+
+func updateTaskMultiWorktreeChildRunID(prepared *preparedTaskMulti, item preparedTaskMultiItem, childRunID string) {
+	if prepared == nil || prepared.worktrees == nil {
+		return
+	}
+	taskName := strings.TrimSpace(item.selectedTask)
+	if taskName == "" {
+		taskName = strings.TrimSpace(item.slug)
+	}
+	if taskName == "" {
+		return
+	}
+	for idx := range prepared.worktrees.Worktrees {
+		if prepared.worktrees.Worktrees[idx].TaskName == taskName {
+			prepared.worktrees.Worktrees[idx].ChildRunID = strings.TrimSpace(childRunID)
+			return
+		}
+	}
 }
 
 func (m *RunManager) startTaskMultiChild(
@@ -702,6 +1040,154 @@ func (m *RunManager) taskMultiChildWasUnchanged(ctx context.Context, childRunID 
 		}
 	}
 	return false
+}
+
+func (m *RunManager) writeTaskMultiHandoffArtifacts(
+	active *activeRun,
+	prepared *preparedTaskMulti,
+) (taskMultiHandoffArtifacts, error) {
+	if active == nil || active.scope == nil || prepared == nil || prepared.worktrees == nil {
+		return taskMultiHandoffArtifacts{}, errors.New("parallel task handoff requires prepared worktree metadata")
+	}
+	artifacts := active.scope.RunArtifacts()
+	if err := os.MkdirAll(artifacts.RunDir, 0o755); err != nil {
+		return taskMultiHandoffArtifacts{}, fmt.Errorf("create parallel handoff artifact directory: %w", err)
+	}
+	manifest := cloneTaskMultiWorktreeManifest(*prepared.worktrees)
+	if err := writeTaskMultiJSONArtifact(artifacts.ParallelWorktreesPath, manifest); err != nil {
+		return taskMultiHandoffArtifacts{}, err
+	}
+	summary, err := m.buildTaskMultiParentSummary(active, prepared, manifest, artifacts)
+	if err != nil {
+		return taskMultiHandoffArtifacts{}, err
+	}
+	if err := writeTaskMultiJSONArtifact(artifacts.ParallelSummaryPath, summary); err != nil {
+		return taskMultiHandoffArtifacts{}, err
+	}
+	prompt := renderTaskMultiHandoffPrompt(summary)
+	if err := os.WriteFile(artifacts.ParallelHandoffPath, []byte(prompt), 0o600); err != nil {
+		return taskMultiHandoffArtifacts{}, fmt.Errorf("write parallel handoff artifact: %w", err)
+	}
+	return taskMultiHandoffArtifacts{
+		HandoffPath:  artifacts.ParallelHandoffPath,
+		SummaryPath:  artifacts.ParallelSummaryPath,
+		WorktreePath: artifacts.ParallelWorktreesPath,
+		Prompt:       prompt,
+		SummaryLine:  renderTaskMultiFinalSummary(summary, prompt),
+	}, nil
+}
+
+func (m *RunManager) buildTaskMultiParentSummary(
+	active *activeRun,
+	prepared *preparedTaskMulti,
+	manifest TaskMultiWorktreeManifest,
+	artifacts model.RunArtifacts,
+) (taskMultiParentSummary, error) {
+	metadataByTask := make(map[string]TaskMultiWorktreeMetadata, len(manifest.Worktrees))
+	for idx := range manifest.Worktrees {
+		metadata := manifest.Worktrees[idx]
+		metadataByTask[metadata.TaskName] = metadata
+	}
+	outcomes := make([]taskMultiChildOutcome, 0, len(prepared.items))
+	for idx := range prepared.items {
+		item := prepared.items[idx]
+		taskName := taskMultiItemTaskName(item)
+		metadata, ok := metadataByTask[taskName]
+		if !ok {
+			return taskMultiParentSummary{}, fmt.Errorf("missing parallel worktree metadata for %s", taskName)
+		}
+		childRunID := strings.TrimSpace(metadata.ChildRunID)
+		if childRunID == "" {
+			return taskMultiParentSummary{}, fmt.Errorf("missing parallel child run id for %s", taskName)
+		}
+		childRow, err := m.globalDB.GetRun(detachContext(active.ctx), childRunID)
+		if err != nil {
+			return taskMultiParentSummary{}, fmt.Errorf("load parallel child run %s: %w", childRunID, err)
+		}
+		displayStatus := m.taskMultiChildDisplayStatus(active.ctx, childRow)
+		outcomes = append(outcomes, taskMultiChildOutcome{
+			TaskName:         taskName,
+			ChildRunID:       childRunID,
+			WorktreePath:     metadata.WorktreePath,
+			RunStatus:        childRow.Status,
+			DisplayStatus:    displayStatus,
+			ChangedWorkspace: displayStatus != taskMultiItemStatusUnchanged,
+			HeadRef:          metadata.BranchName,
+			BranchName:       metadata.BranchName,
+		})
+	}
+	return taskMultiParentSummary{
+		WorkflowSlug:         strings.TrimSpace(manifest.WorkflowSlug),
+		MultipleMode:         prepared.mode,
+		SelectedTasks:        taskMultiSelectedTasks(prepared.items),
+		SourceWorkspaceRoot:  strings.TrimSpace(manifest.SourceWorkspaceRoot),
+		ChildOutcomes:        outcomes,
+		HandoffPromptPath:    artifacts.ParallelHandoffPath,
+		SummaryPath:          artifacts.ParallelSummaryPath,
+		WorktreeManifestPath: artifacts.ParallelWorktreesPath,
+	}, nil
+}
+
+func writeTaskMultiJSONArtifact(path string, value any) error {
+	encoded, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal parallel handoff artifact %s: %w", path, err)
+	}
+	encoded = append(encoded, '\n')
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		return fmt.Errorf("write parallel handoff artifact %s: %w", path, err)
+	}
+	return nil
+}
+
+func renderTaskMultiHandoffPrompt(summary taskMultiParentSummary) string {
+	var builder strings.Builder
+	builder.WriteString("Review the retained parallel task worktrees and prepare the fan-in plan.\n\n")
+	fmt.Fprintf(&builder, "Workflow: %s\n", summary.WorkflowSlug)
+	fmt.Fprintf(&builder, "Source workspace: %s\n", summary.SourceWorkspaceRoot)
+	builder.WriteString("\nChild outcomes:\n")
+	for _, outcome := range summary.ChildOutcomes {
+		fmt.Fprintf(&builder, "- %s: %s (run=%s, worktree=%s, branch=%s)\n",
+			outcome.TaskName,
+			outcome.DisplayStatus,
+			outcome.ChildRunID,
+			outcome.WorktreePath,
+			outcome.BranchName)
+	}
+	builder.WriteString("\nNext step: inspect each retained worktree, compare the changes, ")
+	builder.WriteString("and from the source workspace prepare reviewable branches or pull-request work. ")
+	builder.WriteString("Do not mutate the source workflow files until the fan-in decision is explicit.\n")
+	return builder.String()
+}
+
+func renderTaskMultiFinalSummary(summary taskMultiParentSummary, prompt string) string {
+	return fmt.Sprintf(
+		"parallel handoff ready\nhandoff: %s\nsummary: %s\nworktrees: %s\nprompt:\n%s",
+		summary.HandoffPromptPath,
+		summary.SummaryPath,
+		summary.WorktreeManifestPath,
+		strings.TrimSpace(prompt),
+	)
+}
+
+func cloneTaskMultiWorktreeManifest(manifest TaskMultiWorktreeManifest) TaskMultiWorktreeManifest {
+	manifest.Worktrees = append([]TaskMultiWorktreeMetadata(nil), manifest.Worktrees...)
+	return manifest
+}
+
+func taskMultiSelectedTasks(items []preparedTaskMultiItem) []string {
+	selected := make([]string, 0, len(items))
+	for idx := range items {
+		selected = append(selected, taskMultiItemTaskName(items[idx]))
+	}
+	return selected
+}
+
+func taskMultiItemTaskName(item preparedTaskMultiItem) string {
+	if selectedTask := strings.TrimSpace(item.selectedTask); selectedTask != "" {
+		return selectedTask
+	}
+	return strings.TrimSpace(item.slug)
 }
 
 func (m *RunManager) waitForTaskMultiChild(ctx context.Context, runID string) (globaldb.Run, error) {
