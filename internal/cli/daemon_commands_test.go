@@ -1059,6 +1059,21 @@ func TestResolveTaskRunMultipleMode(t *testing.T) {
 		}
 	})
 
+	t.Run("Should map legacy enqueued mode to sequential", func(t *testing.T) {
+		t.Parallel()
+
+		state := newCommandState(commandKindTasksRun, core.ModePRDTasks)
+		state.projectConfig.Tasks.Run.RunMultipleMode = stringPointer("enqueued")
+		cmd := &cobra.Command{}
+		mode, err := state.resolveTaskRunMultipleMode(cmd)
+		if err != nil {
+			t.Fatalf("resolveTaskRunMultipleMode() error = %v", err)
+		}
+		if mode != "sequential" {
+			t.Fatalf("mode = %q, want sequential", mode)
+		}
+	})
+
 	t.Run("Should return error for invalid internal value", func(t *testing.T) {
 		t.Parallel()
 

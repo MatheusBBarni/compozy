@@ -1228,7 +1228,8 @@ func isParallelTaskChildRunSpec(spec startRunSpec) bool {
 	return spec.mode == runModeTask &&
 		spec.runtimeCfg != nil &&
 		strings.TrimSpace(spec.runtimeCfg.ParentRunID) != "" &&
-		strings.TrimSpace(spec.runtimeCfg.MultipleMode) == workspacecfg.TaskRunMultipleModeParallel
+		strings.TrimSpace(spec.runtimeCfg.MultipleMode) == workspacecfg.TaskRunMultipleModeParallel &&
+		len(spec.runtimeCfg.SelectedTasks) == 1
 }
 
 func (m *RunManager) prepareRunRow(

@@ -492,6 +492,27 @@ func TestTaskRunConfigEffectiveRunMultipleMode(t *testing.T) {
 			t.Fatalf("EffectiveRunMultipleMode() = %q, want %q", got, TaskRunMultipleModeSequential)
 		}
 	})
+
+	t.Run("Should map legacy enqueued mode to sequential", func(t *testing.T) {
+		t.Parallel()
+
+		mode := TaskRunMultipleModeEnqueued
+		cfg := TaskRunConfig{RunMultipleMode: &mode}
+		if got := cfg.EffectiveRunMultipleMode(); got != TaskRunMultipleModeSequential {
+			t.Fatalf("EffectiveRunMultipleMode() = %q, want %q", got, TaskRunMultipleModeSequential)
+		}
+	})
+
+	t.Run("Should prefer multiple over legacy run_multiple_mode", func(t *testing.T) {
+		t.Parallel()
+
+		multiple := TaskRunMultipleModeParallel
+		legacy := TaskRunMultipleModeEnqueued
+		cfg := TaskRunConfig{Multiple: &multiple, RunMultipleMode: &legacy}
+		if got := cfg.EffectiveRunMultipleMode(); got != TaskRunMultipleModeParallel {
+			t.Fatalf("EffectiveRunMultipleMode() = %q, want %q", got, TaskRunMultipleModeParallel)
+		}
+	})
 }
 
 func TestLoadConfigRejectsInvalidTaskRunMultipleMode(t *testing.T) {
@@ -536,7 +557,7 @@ multiple = "sequential"
 		)
 	})
 
-	t.Run("Should reject legacy run_multiple_mode", func(t *testing.T) {
+	t.Run("Should accept legacy run_multiple_mode", func(t *testing.T) {
 		t.Parallel()
 
 		root := t.TempDir()
@@ -545,12 +566,37 @@ multiple = "sequential"
 run_multiple_mode = "enqueued"
 `)
 
-		_, _, err := loadConfigWithIsolatedHome(t, root)
-		if err == nil {
-			t.Fatal("expected legacy tasks.run.run_multiple_mode error")
+		cfg, _, err := loadConfigWithIsolatedHome(t, root)
+		if err != nil {
+			t.Fatalf("load config: %v", err)
 		}
-		if !strings.Contains(err.Error(), "tasks.run.run_multiple_mode") {
-			t.Fatalf("unexpected error: %v", err)
+		assertOptionalString(
+			t,
+			"tasks.run.run_multiple_mode",
+			cfg.Tasks.Run.RunMultipleMode,
+			ptrString(TaskRunMultipleModeEnqueued),
+		)
+		if got := cfg.Tasks.Run.EffectiveRunMultipleMode(); got != TaskRunMultipleModeSequential {
+			t.Fatalf("effective multiple mode = %q, want %q", got, TaskRunMultipleModeSequential)
+		}
+	})
+
+	t.Run("Should prefer multiple over legacy run_multiple_mode when both are set", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		writeWorkspaceConfig(t, root, `
+[tasks.run]
+multiple = "parallel"
+run_multiple_mode = "enqueued"
+`)
+
+		cfg, _, err := loadConfigWithIsolatedHome(t, root)
+		if err != nil {
+			t.Fatalf("load config: %v", err)
+		}
+		if got := cfg.Tasks.Run.EffectiveRunMultipleMode(); got != TaskRunMultipleModeParallel {
+			t.Fatalf("effective multiple mode = %q, want %q", got, TaskRunMultipleModeParallel)
 		}
 	})
 

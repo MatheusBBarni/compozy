@@ -206,6 +206,7 @@ Notes:
 - Unknown keys and invalid value types are rejected during config loading.
 - Relative `add_dirs` are resolved against the owning config scope: the user home directory for `~/.compozy/config.toml` and the workspace root for `.compozy/config.toml`.
 - `[tasks.run] multiple` controls selected-task execution for `tasks run --multiple`. When unset, the built-in default is `"sequential"`.
+- Legacy `[tasks.run] run_multiple_mode` is still accepted for compatibility. `run_multiple_mode = "enqueued"` maps to the new sequential selected-task default, while cross-workflow queues remain enqueued.
 - `multiple = "parallel"` is the opt-in contract for parallel task worktree orchestration. The CLI and daemon carry the effective `multiple_mode` and ordered `selected_tasks` as first-class run inputs.
 - `max_retries` applies to execution-stage ACP failures and inactivity timeouts for `compozy exec`, `compozy tasks run`, and `compozy reviews fix`.
 - Built-in CLI defaults retry timed-out or transient ACP failures twice; set `max_retries = 0` or pass `--max-retries 0` to opt out.

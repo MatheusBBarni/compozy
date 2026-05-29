@@ -46,11 +46,49 @@ func TestDeriveTaskMultiWorktreeMetadataIsDeterministic(t *testing.T) {
 		first.SourceRepositoryRoot != repoRoot {
 		t.Fatalf("metadata linkage = %#v", first)
 	}
-	if first.BranchName != "compozy/parallel/parent-run-01/Workflow-Slug/task_03.md" {
+	if first.BranchName != "compozy/parallel/parent-run-01/Workflow-Slug/"+taskMultiWorktreeTaskSegment("task_03.md") {
 		t.Fatalf("BranchName = %q", first.BranchName)
 	}
 	if !strings.HasPrefix(first.WorktreePath, baseDir) {
 		t.Fatalf("WorktreePath = %q, want under %q", first.WorktreePath, baseDir)
+	}
+}
+
+func TestDeriveTaskMultiWorktreeMetadataDisambiguatesCollidingSelectors(t *testing.T) {
+	sourceRoot := t.TempDir()
+	repoRoot := sourceRoot
+	baseDir := filepath.Join(t.TempDir(), "cache", "task-worktrees")
+
+	first, err := deriveTaskMultiWorktreeMetadata(
+		baseDir,
+		repoRoot,
+		sourceRoot,
+		"parent-run",
+		"workflow",
+		"frontend/task_01",
+	)
+	if err != nil {
+		t.Fatalf("derive first metadata: %v", err)
+	}
+	second, err := deriveTaskMultiWorktreeMetadata(
+		baseDir,
+		repoRoot,
+		sourceRoot,
+		"parent-run",
+		"workflow",
+		"frontend-task_01",
+	)
+	if err != nil {
+		t.Fatalf("derive second metadata: %v", err)
+	}
+	if safeTaskMultiWorktreeSegment(first.TaskName) != safeTaskMultiWorktreeSegment(second.TaskName) {
+		t.Fatal("test setup error: expected colliding safe segments")
+	}
+	if first.WorktreePath == second.WorktreePath {
+		t.Fatalf("worktree paths collided: %q", first.WorktreePath)
+	}
+	if first.BranchName == second.BranchName {
+		t.Fatalf("branch names collided: %q", first.BranchName)
 	}
 }
 

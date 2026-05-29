@@ -122,6 +122,7 @@ func (m *RunManager) StartTaskRunMultiple(
 	if err != nil {
 		return apicore.Run{}, err
 	}
+	mode = normalizeTaskMultiModeForScope(mode, strings.TrimSpace(req.WorkflowSlug))
 	childOverrides, err := taskMultiChildRuntimeOverrides(req.RuntimeOverrides)
 	if err != nil {
 		return apicore.Run{}, err
@@ -348,6 +349,16 @@ func resolveTaskMultiMode(raw string) (string, error) {
 			"multiple_mode",
 		)
 	}
+}
+
+func normalizeTaskMultiModeForScope(mode string, workflowSlug string) string {
+	if strings.TrimSpace(workflowSlug) == "" {
+		return workspacecfg.TaskRunMultipleModeEnqueued
+	}
+	if strings.TrimSpace(mode) == workspacecfg.TaskRunMultipleModeEnqueued {
+		return workspacecfg.TaskRunMultipleModeSequential
+	}
+	return mode
 }
 
 func taskMultiValidationProblem(code string, message string, field string) error {

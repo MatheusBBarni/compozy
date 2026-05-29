@@ -898,6 +898,7 @@ func TestAfterTaskJobSuccessDefersCompletionForParallelChild(t *testing.T) {
 			Mode:          model.ExecutionModePRDTasks,
 			TasksDir:      tasksDir,
 			WorkspaceRoot: workspace,
+			SelectedTasks: []string{"task_01"},
 			MultipleMode:  "parallel",
 			ParentRunID:   "parent-run",
 			RunArtifacts: model.RunArtifacts{

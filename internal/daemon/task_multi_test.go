@@ -816,7 +816,8 @@ func TestRunManagerTaskRunMultiplePreflightRejectsInvalidInputBeforeParentRun(t 
 			env.workspaceRoot,
 			apicore.TaskRunMultipleRequest{
 				Workspace:        env.workspaceRoot,
-				Slugs:            []string{"alpha"},
+				WorkflowSlug:     "alpha",
+				SelectedTasks:    []string{"task_01"},
 				Mode:             "parallel",
 				PresentationMode: defaultPresentationMode,
 				RuntimeOverrides: rawJSON(t, `{"run_id":"task-multi-parallel-mode"}`),
@@ -824,6 +825,39 @@ func TestRunManagerTaskRunMultiplePreflightRejectsInvalidInputBeforeParentRun(t 
 		)
 		if err != nil {
 			t.Fatalf("StartTaskRunMultiple(parallel) error = %v", err)
+		}
+	})
+
+	t.Run("Should coerce legacy queue parallel mode to enqueued", func(t *testing.T) {
+		t.Parallel()
+
+		env := newRunManagerTestEnv(t, runManagerTestDeps{buildRunID: taskMultiRunIDBuilder("task-multi-legacy-queue")})
+		writeTaskMultiWorkflow(t, env, "alpha", "pending")
+
+		parent, err := env.manager.StartTaskRunMultiple(
+			context.Background(),
+			env.workspaceRoot,
+			apicore.TaskRunMultipleRequest{
+				Workspace:        env.workspaceRoot,
+				Slugs:            []string{"alpha"},
+				Mode:             "parallel",
+				PresentationMode: defaultPresentationMode,
+				RuntimeOverrides: rawJSON(t, `{"run_id":"task-multi-legacy-queue"}`),
+			},
+		)
+		if err != nil {
+			t.Fatalf("StartTaskRunMultiple(legacy parallel queue) error = %v", err)
+		}
+		waitForRun(t, env.globalDB, parent.RunID, func(row globaldb.Run) bool {
+			return row.Status == runStatusCompleted
+		})
+		started := requireRunEvent(t, parent.RunID, eventspkg.EventKindTaskRunMultipleStarted)
+		var payload kinds.TaskRunMultiplePayload
+		if err := json.Unmarshal(started.Payload, &payload); err != nil {
+			t.Fatalf("decode started payload: %v", err)
+		}
+		if payload.Mode != "enqueued" {
+			t.Fatalf("started mode = %q, want enqueued", payload.Mode)
 		}
 	})
 

@@ -64,10 +64,12 @@ type TaskRunConfig struct {
 func (cfg TaskRunConfig) EffectiveMultipleMode() string {
 	if cfg.Multiple == nil && cfg.RunMultipleMode != nil {
 		mode := strings.TrimSpace(*cfg.RunMultipleMode)
-		if mode == "" {
+		switch mode {
+		case "", TaskRunMultipleModeEnqueued:
 			return TaskRunMultipleModeSequential
+		default:
+			return mode
 		}
-		return mode
 	}
 	if cfg.Multiple == nil {
 		return TaskRunMultipleModeSequential

@@ -115,7 +115,8 @@ func (j *jobExecutionContext) isParallelChildTaskRun() bool {
 		j.cfg != nil &&
 		j.cfg.Mode == model.ExecutionModePRDTasks &&
 		strings.TrimSpace(j.cfg.ParentRunID) != "" &&
-		strings.TrimSpace(j.cfg.MultipleMode) == workspacecfg.TaskRunMultipleModeParallel
+		strings.TrimSpace(j.cfg.MultipleMode) == workspacecfg.TaskRunMultipleModeParallel &&
+		len(j.cfg.SelectedTasks) == 1
 }
 
 // workspaceUnchanged compares the pre-dispatch snapshot to a fresh capture and

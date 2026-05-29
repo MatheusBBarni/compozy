@@ -1313,8 +1313,8 @@ func TestTasksRunMultipleCommandRejectsInvalidSlugListsBeforeDaemon(t *testing.T
 	})
 }
 
-func TestTasksRunMultipleCommandParallelConfigSendsParallelMode(t *testing.T) {
-	t.Run("Should send parallel config as first-class multiple mode", func(t *testing.T) {
+func TestTasksRunMultipleCommandParallelConfigKeepsLegacyQueueEnqueued(t *testing.T) {
+	t.Run("Should keep cross-workflow queues enqueued when config requests parallel", func(t *testing.T) {
 		t.Parallel()
 
 		workspaceRoot, alphaDir := makeValidateTasksWorkspace(t, "alpha")
@@ -1368,8 +1368,8 @@ multiple = "parallel"
 				stderr,
 			)
 		}
-		if readyClient.startMultipleRequest.MultipleMode != "parallel" {
-			t.Fatalf("multiple_mode = %q, want parallel", readyClient.startMultipleRequest.MultipleMode)
+		if readyClient.startMultipleRequest.MultipleMode != "enqueued" {
+			t.Fatalf("multiple_mode = %q, want enqueued", readyClient.startMultipleRequest.MultipleMode)
 		}
 		if stderr != "" && strings.Contains(stderr, "fallback") {
 			t.Fatalf("did not expect fallback message, got %q", stderr)
@@ -1572,10 +1572,9 @@ func TestTasksRunMultipleCommandInProcessStreamReconstructsParentQueueState(t *t
 	})
 }
 
-func TestTasksRunMultipleCommandInProcessParallelConfigStreamsParallelContract(t *testing.T) {
-	t.Run("Should stream first-class parallel mode contract", func(t *testing.T) {
+func TestTasksRunMultipleCommandInProcessParallelConfigKeepsLegacyQueueEnqueued(t *testing.T) {
+	t.Run("Should keep cross-workflow queues enqueued in process", func(t *testing.T) {
 		workspaceRoot, alphaDir := makeValidateTasksWorkspace(t, "alpha")
-		alphaTaskPath := filepath.Join(alphaDir, "task_01.md")
 		writeRawTaskFileForCLI(t, alphaDir, "task_01.md", cliTaskMarkdown(
 			[]string{
 				"status: pending",
@@ -1586,33 +1585,13 @@ func TestTasksRunMultipleCommandInProcessParallelConfigStreamsParallelContract(t
 			"# Task 1: Alpha Task",
 		))
 		writeTaskWorkflowForCLI(t, workspaceRoot, "beta")
-		betaTaskPath := filepath.Join(workspaceRoot, ".compozy", "tasks", "beta", "task_01.md")
-		sourceBefore := readCLIFileContents(t, alphaTaskPath, betaTaskPath)
 		writeCLIWorkspaceConfig(t, workspaceRoot, `
 [tasks.run]
 multiple = "parallel"
 `)
-		if _, err := exec.LookPath("git"); err != nil {
-			t.Skip("git binary not available")
-		}
-		initCLIParallelWorktreeGitRepo(t, workspaceRoot)
-		if status := gitStatusPorcelainForCLI(t, workspaceRoot); status != "" {
-			t.Fatalf("source workspace dirty before parallel run: %q", status)
-		}
 		withWorkingDir(t, workspaceRoot)
 
-		client := installInProcessCLIDaemonBootstrapWithConfigClient(t, daemon.RunManagerConfig{
-			Prepare: func(context.Context, *model.RuntimeConfig, model.RunScope) (*model.SolvePreparation, error) {
-				return &model.SolvePreparation{}, nil
-			},
-			Execute: func(_ context.Context, _ *model.SolvePreparation, cfg *model.RuntimeConfig) error {
-				return os.WriteFile(
-					filepath.Join(cfg.WorkspaceRoot, "child-output-"+cfg.Name+".txt"),
-					[]byte("child output"),
-					0o600,
-				)
-			},
-		})
+		client := installInProcessCLIDaemonBootstrapWithConfigClient(t, daemon.RunManagerConfig{})
 
 		defaults := allowBundledSkillsForExecutionTests()
 		defaults.isInteractive = func() bool { return false }
@@ -1626,6 +1605,7 @@ multiple = "parallel"
 			"--multiple",
 			"alpha,beta",
 			"--stream",
+			"--dry-run",
 		)
 		if err != nil {
 			t.Fatalf(
@@ -1640,7 +1620,7 @@ multiple = "parallel"
 		}
 		if !containsAll(
 			stdout,
-			"task queue started | mode=parallel total=2",
+			"task queue started | mode=enqueued total=2",
 			"task[1/2] alpha completed",
 			"task[2/2] beta completed",
 		) {
@@ -1655,38 +1635,16 @@ multiple = "parallel"
 		assertTaskMultiSnapshotItemsForCLI(t, snapshot, []string{"alpha", "beta"})
 
 		started := taskMultiStartedPayloadForCLI(t, client, runID)
-		if started.Mode != "parallel" {
-			t.Fatalf("task.multi.started mode = %q, want parallel", started.Mode)
-		}
-		assertCLIFileContentsUnchanged(t, sourceBefore)
-		if status := gitStatusPorcelainForCLI(t, workspaceRoot); status != "" {
-			t.Fatalf("source workspace dirty after parallel child execution: %q", status)
+		if started.Mode != "enqueued" {
+			t.Fatalf("task.multi.started mode = %q, want enqueued", started.Mode)
 		}
 
 		artifacts, err := model.ResolveHomeRunArtifacts(runID)
 		if err != nil {
 			t.Fatalf("ResolveHomeRunArtifacts(%q) error = %v", runID, err)
 		}
-		var manifest daemon.TaskMultiWorktreeManifest
-		readCLIJSONFile(t, artifacts.ParallelWorktreesPath, &manifest)
-		if len(manifest.Worktrees) != 2 {
-			t.Fatalf(
-				"manifest worktree count = %d, want one per selected task: %#v",
-				len(manifest.Worktrees),
-				manifest.Worktrees,
-			)
-		}
-		for _, worktree := range manifest.Worktrees {
-			if strings.TrimSpace(worktree.ChildRunID) == "" || strings.TrimSpace(worktree.WorktreePath) == "" {
-				t.Fatalf("incomplete worktree metadata: %#v", worktree)
-			}
-			if strings.HasPrefix(worktree.WorktreePath, workspaceRoot) {
-				t.Fatalf("worktree %q is inside source workspace %q", worktree.WorktreePath, workspaceRoot)
-			}
-			childOutputPath := filepath.Join(worktree.WorktreePath, "child-output-"+worktree.TaskName+".txt")
-			if content, readErr := os.ReadFile(childOutputPath); readErr != nil || string(content) != "child output" {
-				t.Fatalf("child output %s = %q, %v; want child output", childOutputPath, string(content), readErr)
-			}
+		if _, err := os.Stat(artifacts.ParallelWorktreesPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("parallel worktree manifest unexpectedly present: %v", err)
 		}
 	})
 }
@@ -1778,85 +1736,6 @@ multiple = "sequential"
 			t.Fatalf("unselected task_03 appeared in sequential stream:\n%s", stdout)
 		}
 	})
-}
-
-func readCLIFileContents(t *testing.T, paths ...string) map[string]string {
-	t.Helper()
-	contents := make(map[string]string, len(paths))
-	for _, path := range paths {
-		content, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
-		}
-		contents[path] = string(content)
-	}
-	return contents
-}
-
-func assertCLIFileContentsUnchanged(t *testing.T, want map[string]string) {
-	t.Helper()
-	for path, wantContent := range want {
-		got, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read %s after command: %v", path, err)
-		}
-		if string(got) != wantContent {
-			t.Fatalf(
-				"source file %s changed during parallel execution\nwant:\n%s\ngot:\n%s",
-				path,
-				wantContent,
-				string(got),
-			)
-		}
-	}
-}
-
-func readCLIJSONFile(t *testing.T, path string, target any) {
-	t.Helper()
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	if err := json.Unmarshal(content, target); err != nil {
-		t.Fatalf("decode %s: %v\n%s", path, err, string(content))
-	}
-}
-
-func gitStatusPorcelainForCLI(t *testing.T, workspaceRoot string) string {
-	t.Helper()
-	cmd := exec.CommandContext(t.Context(), "git", "status", "--porcelain")
-	cmd.Dir = workspaceRoot
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git status --porcelain in %s failed: %v: %s", workspaceRoot, err, strings.TrimSpace(string(output)))
-	}
-	return strings.TrimSpace(string(output))
-}
-
-func initCLIParallelWorktreeGitRepo(t *testing.T, workspaceRoot string) {
-	t.Helper()
-	runCLIGit(t, workspaceRoot, "init", "--initial-branch=main")
-	runCLIGit(t, workspaceRoot, "config", "user.email", "cli-parallel@example.com")
-	runCLIGit(t, workspaceRoot, "config", "user.name", "CLI Parallel Test")
-	runCLIGit(t, workspaceRoot, "config", "commit.gpgsign", "false")
-	runCLIGit(t, workspaceRoot, "add", ".")
-	runCLIGit(t, workspaceRoot, "commit", "-m", "initial workflow")
-}
-
-func runCLIGit(t *testing.T, workDir string, args ...string) {
-	t.Helper()
-	cmd := exec.CommandContext(t.Context(), "git", args...)
-	cmd.Dir = workDir
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf(
-			"git %s in %s failed: %v: %s",
-			strings.Join(args, " "),
-			workDir,
-			err,
-			strings.TrimSpace(string(output)),
-		)
-	}
 }
 
 func TestTasksRunMultipleCommandStreamReturnsNonZeroOnParentFailure(t *testing.T) {

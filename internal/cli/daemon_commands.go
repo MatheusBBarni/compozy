@@ -434,7 +434,7 @@ func (s *commandState) runTaskWorkflowsMultiple(cmd *cobra.Command, args []strin
 	if err != nil {
 		return withExitCode(2, err)
 	}
-	if !workflowScoped && mode == workspacecfg.TaskRunMultipleModeSequential {
+	if !workflowScoped {
 		mode = workspacecfg.TaskRunMultipleModeEnqueued
 	}
 	runtimeOverrides, err := s.buildTaskRunRuntimeOverrides(cmd)

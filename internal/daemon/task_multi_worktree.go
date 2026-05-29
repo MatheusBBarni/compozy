@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +15,8 @@ import (
 )
 
 const taskMultiWorktreeDirName = "task-worktrees"
+
+const taskMultiWorktreeTaskHashBytes = 6
 
 // TaskMultiWorktreeMetadata captures the retained worktree lane for one selected task.
 type TaskMultiWorktreeMetadata struct {
@@ -234,13 +237,15 @@ func deriveTaskMultiWorktreeMetadata(
 ) (TaskMultiWorktreeMetadata, error) {
 	safeParent := safeTaskMultiWorktreeSegment(parentRunID)
 	safeWorkflow := safeTaskMultiWorktreeSegment(workflowSlug)
-	safeTask := safeTaskMultiWorktreeSegment(taskName)
-	if safeParent == "" || safeWorkflow == "" || safeTask == "" {
+	taskSegment := taskMultiWorktreeTaskSegment(taskName)
+	if safeParent == "" || safeWorkflow == "" || taskSegment == "" {
 		return TaskMultiWorktreeMetadata{}, errors.New(
 			"task multi worktree metadata requires parent run, workflow, and task",
 		)
 	}
-	worktreePath, err := compozyconfig.ResolvePath(filepath.Join(baseDir, safeParent, safeWorkflow, safeTask))
+	worktreePath, err := compozyconfig.ResolvePath(
+		filepath.Join(baseDir, safeParent, safeWorkflow, taskSegment),
+	)
 	if err != nil {
 		return TaskMultiWorktreeMetadata{}, fmt.Errorf("resolve retained worktree path: %w", err)
 	}
@@ -258,9 +263,22 @@ func deriveTaskMultiWorktreeMetadata(
 			"compozy/parallel/%s/%s/%s",
 			safeParent,
 			safeWorkflow,
-			safeTask,
+			taskSegment,
 		),
 	}, nil
+}
+
+func taskMultiWorktreeTaskSegment(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	safe := safeTaskMultiWorktreeSegment(trimmed)
+	if safe == "" {
+		return ""
+	}
+	hash := sha256.Sum256([]byte(trimmed))
+	return fmt.Sprintf("%s-%x", safe, hash[:taskMultiWorktreeTaskHashBytes])
 }
 
 func ensurePathOutsideRoot(path string, root string) error {
