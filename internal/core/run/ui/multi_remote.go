@@ -716,6 +716,9 @@ func (m *multiRunModel) handleChildBootstrap(msg multiRunChildBootstrapMsg) {
 		return
 	}
 	m.tabs[idx].applyChildSnapshot(msg.Snapshot, m.cfg, m.childWidth(), m.childHeight())
+	if isTerminalTaskMultiStatus(m.tabs[idx].status) {
+		return
+	}
 	if status := taskMultiStatusFromRunStatus(msg.Snapshot.Run.Status); status != "" {
 		m.tabs[idx].status = status
 		m.tabs[idx].terminal = isTerminalTaskMultiStatus(status)
@@ -741,6 +744,9 @@ func (m *multiRunModel) handleChildEvent(msg multiRunChildEventMsg) tea.Cmd {
 		}
 	}
 	if status := taskMultiStatusFromChildRunEvent(msg.Event.Kind); status != "" {
+		if isTerminalTaskMultiStatus(tab.status) {
+			return cmd
+		}
 		tab.status = status
 		tab.terminal = isTerminalTaskMultiStatus(status)
 	}

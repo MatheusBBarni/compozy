@@ -1326,8 +1326,10 @@ func (b *taskMultiSnapshotBuilder) applyEvent(event eventspkg.Event) error {
 		if err != nil {
 			return err
 		}
-		for _, slug := range payload.Slugs {
-			b.ensureItem(slug).Status = taskMultiItemStatusQueued
+		for idx, slug := range payload.Slugs {
+			item := b.ensureItemAt(slug, idx, len(payload.Slugs))
+			item.Slug = strings.TrimSpace(slug)
+			item.Status = taskMultiItemStatusQueued
 		}
 	case eventspkg.EventKindTaskRunMultipleItemQueued,
 		eventspkg.EventKindTaskRunMultipleChildStarted,
@@ -1338,7 +1340,7 @@ func (b *taskMultiSnapshotBuilder) applyEvent(event eventspkg.Event) error {
 		if err != nil {
 			return err
 		}
-		item := b.ensureItem(payloadItemKey(payload))
+		item := b.ensureItemAt(payloadItemKey(payload), payload.Index, payload.Total)
 		item.Slug = strings.TrimSpace(payload.Slug)
 		item.SelectedTask = strings.TrimSpace(payload.SelectedTask)
 		item.Status = strings.TrimSpace(payload.Status)
@@ -1380,6 +1382,23 @@ func (b *taskMultiSnapshotBuilder) ensureItem(slug string) *apicore.TaskRunMulti
 	idx := len(b.items) - 1
 	b.index[trimmed] = idx
 	return &b.items[idx]
+}
+
+func (b *taskMultiSnapshotBuilder) ensureItemAt(slug string, index int, total int) *apicore.TaskRunMultipleItem {
+	trimmed := strings.TrimSpace(slug)
+	if idx, ok := b.index[trimmed]; ok {
+		return &b.items[idx]
+	}
+	if trimmed == "" || total <= 0 || index < 0 || index >= total {
+		return b.ensureItem(trimmed)
+	}
+	for len(b.items) < total {
+		b.items = append(b.items, apicore.TaskRunMultipleItem{Status: taskMultiItemStatusQueued})
+	}
+	b.items[index].Slug = trimmed
+	b.items[index].Status = taskMultiItemStatusQueued
+	b.index[trimmed] = index
+	return &b.items[index]
 }
 
 func (b *taskMultiSnapshotBuilder) snapshotItems() []apicore.TaskRunMultipleItem {

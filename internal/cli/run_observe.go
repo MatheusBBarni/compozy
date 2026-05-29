@@ -582,6 +582,9 @@ func renderObservedTaskMultiItem(event eventspkg.Event, fallbackStatus string) (
 		return fmt.Sprintf("task %s\n", fallbackStatus), true
 	}
 	status := firstNonEmpty(payload.Status, fallbackStatus)
+	if displayStatus := strings.TrimSpace(payload.DisplayStatus); displayStatus != "" {
+		status = displayStatus
+	}
 	label := observedTaskMultiLabel(payload)
 	childRunID := strings.TrimSpace(payload.ChildRunID)
 	message := strings.TrimSpace(payload.Error)

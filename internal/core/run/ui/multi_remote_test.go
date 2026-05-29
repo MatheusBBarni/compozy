@@ -542,6 +542,63 @@ func TestRemoteMultiRunReattachRestoresCompletedActiveAndQueuedTabs(t *testing.T
 	}
 }
 
+func TestMultiRunParentDisplayStatusSurvivesChildBootstrapAndTerminalEvents(t *testing.T) {
+	t.Parallel()
+
+	mdl, _, err := newRemoteMultiRunModel(context.Background(), RemoteMultiRunAttachOptions{
+		Snapshot: apicore.TaskRunMultipleSnapshot{
+			Run: apicore.Run{RunID: "parent-run", Status: remoteRunStatusRunning},
+			Items: []apicore.TaskRunMultipleItem{{
+				Slug:   "task_01",
+				Status: taskMultiStatusRunning,
+				RunID:  "run-task_01",
+			}},
+		},
+		LoadChildSnapshot: func(context.Context, string) (apicore.RunSnapshot, error) {
+			return childSnapshotForTest(t, "run-task_01", "task_01", remoteRunStatusRunning, "working"), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("newRemoteMultiRunModel() error = %v", err)
+	}
+
+	mdl.handleParentEvent(mustRuntimeEventUITest(
+		t,
+		eventspkg.EventKindTaskRunMultipleChildCompleted,
+		kinds.TaskRunMultiplePayload{
+			Slug:          "task_01",
+			SelectedTask:  "task_01",
+			Index:         0,
+			Total:         1,
+			Status:        taskMultiStatusCompleted,
+			DisplayStatus: taskMultiStatusUnchanged,
+			ChildRunID:    "run-task_01",
+		},
+	))
+	mdl.handleChildBootstrap(multiRunChildBootstrapMsg{
+		RunID:    "run-task_01",
+		Snapshot: childSnapshotForTest(t, "run-task_01", "task_01", remoteRunStatusCompleted, "done"),
+	})
+	if got := mdl.tabs[0].status; got != taskMultiStatusUnchanged {
+		t.Fatalf("status after child bootstrap = %q, want unchanged", got)
+	}
+
+	cmd := mdl.handleChildEvent(multiRunChildEventMsg{
+		RunID: "run-task_01",
+		Event: mustRuntimeEventUITest(
+			t,
+			eventspkg.EventKindRunCompleted,
+			kinds.RunCompletedPayload{JobsTotal: 1, JobsSucceeded: 1},
+		),
+	})
+	if cmd != nil {
+		t.Fatalf("terminal child event should not produce active command after parent terminal status, got %T", cmd())
+	}
+	if got := mdl.tabs[0].status; got != taskMultiStatusUnchanged {
+		t.Fatalf("status after child terminal event = %q, want unchanged", got)
+	}
+}
+
 func TestMultiRunControllerLifecycleCoversSessionMethods(t *testing.T) {
 	t.Parallel()
 

@@ -225,6 +225,25 @@ func TestQueryHelperDirectoryAndStatusBranches(t *testing.T) {
 			t.Fatalf("unexpected summarizeRunJobCounts() result: %#v", counts)
 		}
 	})
+
+	t.Run("Should hide child runs only while a known parent is active", func(t *testing.T) {
+		t.Parallel()
+
+		runs := []apicore.Run{
+			{RunID: "parent-active", Status: runStatusRunning},
+			{RunID: "child-active", ParentRunID: "parent-active", Status: runStatusRunning},
+			{RunID: "parent-terminal", Status: runStatusCompleted},
+			{RunID: "child-terminal", ParentRunID: "parent-terminal", Status: runStatusCompleted},
+			{RunID: "child-still-running", ParentRunID: "parent-terminal", Status: runStatusRunning},
+			{RunID: "orphan-child", ParentRunID: "missing-parent", Status: runStatusRunning},
+		}
+
+		got := apicoreRunIDs(dashboardVisibleRuns(runs))
+		want := []string{"parent-active", "parent-terminal", "child-still-running", "orphan-child"}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("dashboardVisibleRuns() = %v, want %v", got, want)
+		}
+	})
 }
 
 func TestQueryHelpersProtectMarkdownDocumentsFromSymlinkAndMetadataAliasing(t *testing.T) {

@@ -508,7 +508,7 @@ func (s *commandState) startSequentialSelectedTaskRun(
 	if err != nil {
 		return mapDaemonCommandError(err)
 	}
-	return handleStartedTaskRun(ctx, cmd, client, run)
+	return handleStartedSequentialSelectedTaskRun(ctx, cmd, client, run, selectedTasks)
 }
 
 func (s *commandState) preflightSelectedTaskRun(
@@ -618,6 +618,28 @@ func handleStartedTaskRun(
 	return nil
 }
 
+func handleStartedSequentialSelectedTaskRun(
+	ctx context.Context,
+	cmd *cobra.Command,
+	client daemonCommandClient,
+	run apicore.Run,
+	selectedTasks []string,
+) error {
+	if run.PresentationMode != attachModeStream {
+		return handleStartedTaskRun(ctx, cmd, client, run)
+	}
+	if err := writeStartedTaskRun(cmd, run); err != nil {
+		return err
+	}
+	if err := writeSequentialSelectedTaskRun(cmd, selectedTasks); err != nil {
+		return err
+	}
+	if err := watchCLIRun(ctx, cmd.OutOrStdout(), client, run.RunID); err != nil {
+		return mapDaemonCommandError(err)
+	}
+	return nil
+}
+
 func handleStartedTaskRunMultiple(
 	ctx context.Context,
 	cmd *cobra.Command,
@@ -661,6 +683,19 @@ func writeStartedTaskRun(cmd *cobra.Command, run apicore.Run) error {
 		run.PresentationMode,
 	); err != nil {
 		return withExitCode(2, fmt.Errorf("write task run summary: %w", err))
+	}
+	return nil
+}
+
+func writeSequentialSelectedTaskRun(cmd *cobra.Command, selectedTasks []string) error {
+	out := cmd.OutOrStdout()
+	if _, err := fmt.Fprintf(out, "task selection | mode=sequential total=%d\n", len(selectedTasks)); err != nil {
+		return withExitCode(2, fmt.Errorf("write sequential task selection: %w", err))
+	}
+	for index, slug := range selectedTasks {
+		if _, err := fmt.Fprintf(out, "task[%d/%d] %s selected\n", index+1, len(selectedTasks), slug); err != nil {
+			return withExitCode(2, fmt.Errorf("write sequential task selection item: %w", err))
+		}
 	}
 	return nil
 }

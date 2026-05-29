@@ -45,6 +45,28 @@ func TestRenderObservedRunFailedDisplaysTrimmedHandoffSummary(t *testing.T) {
 	}
 }
 
+func TestRenderObservedTaskMultiItemUsesDisplayStatus(t *testing.T) {
+	t.Parallel()
+
+	event := encodeObservedEvent(t, events.EventKindTaskRunMultipleChildCompleted, kinds.TaskRunMultiplePayload{
+		Slug:          "task_01",
+		SelectedTask:  "task_01",
+		Index:         0,
+		Total:         2,
+		Status:        "completed",
+		DisplayStatus: "unchanged",
+		ChildRunID:    "child-task_01",
+	})
+
+	got, handled := renderObservedTaskMultiItem(event, "completed")
+	if !handled {
+		t.Fatal("expected task multi item event to be handled")
+	}
+	if !strings.Contains(got, "task[1/2] task_01 unchanged | run=child-task_01") {
+		t.Fatalf("rendered task item = %q, want unchanged display status", got)
+	}
+}
+
 func encodeObservedEvent[T any](t *testing.T, kind events.EventKind, payload T) events.Event {
 	t.Helper()
 	encoded, err := json.Marshal(payload)

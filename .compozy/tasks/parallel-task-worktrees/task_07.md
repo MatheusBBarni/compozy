@@ -1,5 +1,5 @@
 ---
-status: pending
+status: completed
 title: Align run observation surfaces and end-to-end coverage
 type: backend
 complexity: high
@@ -13,11 +13,14 @@ dependencies:
 
 ## Overview
 
-This task makes the new execution model understandable and provable. It aligns parent-child snapshots, CLI/TUI observation behavior, and visibility rules with the new parallel semantics, then adds integration and end-to-end coverage for both sequential and parallel multi-task flows.
+This is an execution-only task against an already approved design. Apply the approved observation model to snapshots, CLI/TUI behavior, visibility rules, and coverage so sequential and parallel `--multiple` execution are observable and testable without reopening design work.
 
 <critical>
 - ALWAYS READ the PRD and TechSpec before starting
 - REFERENCE TECHSPEC for implementation details — do not duplicate here
+- PRD AND TECHSPEC ARE ALREADY APPROVED — do not reopen design review
+- DO NOT INVOKE BRAINSTORMING OR CREATE NEW DESIGN DOCS — proceed directly to implementation and tests
+- MINIMIZE EXPLORATION — prefer direct reads of the listed files over spawning exploratory subagents unless blocked
 - FOCUS ON "WHAT" — describe what needs to be accomplished, not how
 - MINIMIZE CODE — show code only to illustrate current structure or problem areas
 - TESTS REQUIRED — every task MUST include tests in deliverables
@@ -31,14 +34,16 @@ This task makes the new execution model understandable and provable. It aligns p
 </requirements>
 
 ## Subtasks
-- [ ] 7.1 Align snapshot and read-model behavior with the new parent-child execution semantics.
-- [ ] 7.2 Update CLI/TUI observation and visibility behavior to preserve ordered parent-child run presentation.
-- [ ] 7.3 Add integration coverage for sequential and parallel multi-task observation paths.
-- [ ] 7.4 Add end-to-end coverage that exercises operator-visible behavior for the new execution model.
+- [x] 7.1 Align snapshot and read-model behavior with the new parent-child execution semantics.
+- [x] 7.2 Update CLI/TUI observation and visibility behavior to preserve ordered parent-child run presentation.
+- [x] 7.3 Add integration coverage for sequential and parallel multi-task observation paths.
+- [x] 7.4 Add end-to-end coverage that exercises operator-visible behavior for the new execution model.
 
 ## Implementation Details
 
 Reference the TechSpec sections "Monitoring and Observability", "Impact Analysis", and "Testing Approach". This task should validate the whole operator experience rather than only low-level coordinator logic.
+
+Primary edit surface for this task should stay bounded to snapshot/query/observe/UI coverage files such as `internal/daemon/task_multi.go`, `internal/daemon/query_service.go`, `internal/cli/run_observe.go`, `internal/core/run/ui/multi_remote.go`, and the listed integration/E2E tests.
 
 ### Relevant Files
 - `internal/daemon/task_multi.go` — parent-child event emission and snapshot reconstruction.
@@ -71,16 +76,21 @@ Reference the TechSpec sections "Monitoring and Observability", "Impact Analysis
 
 ## Tests
 - Unit tests:
-  - [ ] Parent-child snapshot items remain in selected-task order across reconstruction and reattach.
-  - [ ] Visibility logic hides or shows child runs correctly based on parent state.
-  - [ ] CLI/TUI observation renders the expected final parent summary and child outcome transitions.
+  - [x] Parent-child snapshot items remain in selected-task order across reconstruction and reattach.
+  - [x] Visibility logic hides or shows child runs correctly based on parent state.
+  - [x] CLI/TUI observation renders the expected final parent summary and child outcome transitions.
 - Integration tests:
-  - [ ] Sequential `--multiple` observation shows only the selected tasks and correct terminal summaries.
-  - [ ] Parallel mode observation shows exactly one child lane per selected task and one retained worktree folder per selected task.
-  - [ ] Failure or unchanged child outcomes remain visible without implying source reconciliation.
-  - [ ] Parallel execution keeps the source workspace unchanged while child runs operate in separate worktree folders.
+  - [x] Sequential `--multiple` observation shows only the selected tasks and correct terminal summaries.
+  - [x] Parallel mode observation shows exactly one child lane per selected task and one retained worktree folder per selected task.
+  - [x] Failure or unchanged child outcomes remain visible without implying source reconciliation.
+  - [x] Parallel execution keeps the source workspace unchanged while child runs operate in separate worktree folders.
 - Test coverage target: >=80%
 - All tests must pass
+
+## Verification Evidence
+
+- `env -u GOROOT go test ./internal/daemon ./internal/cli ./internal/core/run/ui` passed after targeted edits.
+- `env -u GOROOT make verify` passed: frontend lint/typecheck/tests/build, Go fmt/lint/tests/build, and frontend E2E all succeeded.
 
 ## Success Criteria
 - All tests passing

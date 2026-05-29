@@ -1575,6 +1575,7 @@ func TestTasksRunMultipleCommandInProcessStreamReconstructsParentQueueState(t *t
 func TestTasksRunMultipleCommandInProcessParallelConfigStreamsParallelContract(t *testing.T) {
 	t.Run("Should stream first-class parallel mode contract", func(t *testing.T) {
 		workspaceRoot, alphaDir := makeValidateTasksWorkspace(t, "alpha")
+		alphaTaskPath := filepath.Join(alphaDir, "task_01.md")
 		writeRawTaskFileForCLI(t, alphaDir, "task_01.md", cliTaskMarkdown(
 			[]string{
 				"status: pending",
@@ -1585,6 +1586,8 @@ func TestTasksRunMultipleCommandInProcessParallelConfigStreamsParallelContract(t
 			"# Task 1: Alpha Task",
 		))
 		writeTaskWorkflowForCLI(t, workspaceRoot, "beta")
+		betaTaskPath := filepath.Join(workspaceRoot, ".compozy", "tasks", "beta", "task_01.md")
+		sourceBefore := readCLIFileContents(t, alphaTaskPath, betaTaskPath)
 		writeCLIWorkspaceConfig(t, workspaceRoot, `
 [tasks.run]
 multiple = "parallel"
@@ -1593,9 +1596,23 @@ multiple = "parallel"
 			t.Skip("git binary not available")
 		}
 		initCLIParallelWorktreeGitRepo(t, workspaceRoot)
+		if status := gitStatusPorcelainForCLI(t, workspaceRoot); status != "" {
+			t.Fatalf("source workspace dirty before parallel run: %q", status)
+		}
 		withWorkingDir(t, workspaceRoot)
 
-		client := installInProcessCLIDaemonBootstrapWithConfigClient(t, daemon.RunManagerConfig{})
+		client := installInProcessCLIDaemonBootstrapWithConfigClient(t, daemon.RunManagerConfig{
+			Prepare: func(context.Context, *model.RuntimeConfig, model.RunScope) (*model.SolvePreparation, error) {
+				return &model.SolvePreparation{}, nil
+			},
+			Execute: func(_ context.Context, _ *model.SolvePreparation, cfg *model.RuntimeConfig) error {
+				return os.WriteFile(
+					filepath.Join(cfg.WorkspaceRoot, "child-output-"+cfg.Name+".txt"),
+					[]byte("child output"),
+					0o600,
+				)
+			},
+		})
 
 		defaults := allowBundledSkillsForExecutionTests()
 		defaults.isInteractive = func() bool { return false }
@@ -1609,7 +1626,6 @@ multiple = "parallel"
 			"--multiple",
 			"alpha,beta",
 			"--stream",
-			"--dry-run",
 		)
 		if err != nil {
 			t.Fatalf(
@@ -1642,7 +1658,179 @@ multiple = "parallel"
 		if started.Mode != "parallel" {
 			t.Fatalf("task.multi.started mode = %q, want parallel", started.Mode)
 		}
+		assertCLIFileContentsUnchanged(t, sourceBefore)
+		if status := gitStatusPorcelainForCLI(t, workspaceRoot); status != "" {
+			t.Fatalf("source workspace dirty after parallel child execution: %q", status)
+		}
+
+		artifacts, err := model.ResolveHomeRunArtifacts(runID)
+		if err != nil {
+			t.Fatalf("ResolveHomeRunArtifacts(%q) error = %v", runID, err)
+		}
+		var manifest daemon.TaskMultiWorktreeManifest
+		readCLIJSONFile(t, artifacts.ParallelWorktreesPath, &manifest)
+		if len(manifest.Worktrees) != 2 {
+			t.Fatalf(
+				"manifest worktree count = %d, want one per selected task: %#v",
+				len(manifest.Worktrees),
+				manifest.Worktrees,
+			)
+		}
+		for _, worktree := range manifest.Worktrees {
+			if strings.TrimSpace(worktree.ChildRunID) == "" || strings.TrimSpace(worktree.WorktreePath) == "" {
+				t.Fatalf("incomplete worktree metadata: %#v", worktree)
+			}
+			if strings.HasPrefix(worktree.WorktreePath, workspaceRoot) {
+				t.Fatalf("worktree %q is inside source workspace %q", worktree.WorktreePath, workspaceRoot)
+			}
+			childOutputPath := filepath.Join(worktree.WorktreePath, "child-output-"+worktree.TaskName+".txt")
+			if content, readErr := os.ReadFile(childOutputPath); readErr != nil || string(content) != "child output" {
+				t.Fatalf("child output %s = %q, %v; want child output", childOutputPath, string(content), readErr)
+			}
+		}
 	})
+}
+
+func TestTasksRunMultipleWorkflowSequentialInProcessStreamShowsSelectedTasks(t *testing.T) {
+	t.Run("Should stream selected workflow tasks in caller order for sequential mode", func(t *testing.T) {
+		workspaceRoot, alphaDir := makeValidateTasksWorkspace(t, "alpha")
+		writeRawTaskFileForCLI(t, alphaDir, "task_01.md", cliTaskMarkdown(
+			[]string{
+				"status: pending",
+				"title: First Task",
+				"type: backend",
+				"complexity: low",
+			},
+			"# Task 1: First Task",
+		))
+		writeRawTaskFileForCLI(t, alphaDir, "task_02.md", cliTaskMarkdown(
+			[]string{
+				"status: pending",
+				"title: Second Task",
+				"type: backend",
+				"complexity: low",
+			},
+			"# Task 2: Second Task",
+		))
+		writeRawTaskFileForCLI(t, alphaDir, "task_03.md", cliTaskMarkdown(
+			[]string{
+				"status: pending",
+				"title: Third Task",
+				"type: backend",
+				"complexity: low",
+			},
+			"# Task 3: Third Task",
+		))
+		writeCLIWorkspaceConfig(t, workspaceRoot, `
+[tasks.run]
+multiple = "sequential"
+`)
+		withWorkingDir(t, workspaceRoot)
+
+		var executedSelectedTasks []string
+		var executedMultipleMode string
+		installInProcessCLIDaemonBootstrapWithConfig(t, daemon.RunManagerConfig{
+			Prepare: func(context.Context, *model.RuntimeConfig, model.RunScope) (*model.SolvePreparation, error) {
+				return &model.SolvePreparation{}, nil
+			},
+			Execute: func(_ context.Context, _ *model.SolvePreparation, cfg *model.RuntimeConfig) error {
+				executedSelectedTasks = append([]string(nil), cfg.SelectedTasks...)
+				executedMultipleMode = cfg.MultipleMode
+				return nil
+			},
+		})
+
+		defaults := allowBundledSkillsForExecutionTests()
+		defaults.isInteractive = func() bool { return false }
+		cmd := newRootCommandWithDefaults(newLazyRootDispatcher(), defaults)
+		stdout, stderr, err := executeCommandCapturingProcessIO(
+			t,
+			cmd,
+			nil,
+			"tasks",
+			"run",
+			"alpha",
+			"--multiple",
+			"task_02,task_01",
+			"--stream",
+		)
+		if err != nil {
+			t.Fatalf("execute sequential selected tasks stream: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+		}
+		if !containsAll(
+			stdout,
+			"task run started:",
+			"(mode=stream)",
+			"task selection | mode=sequential total=2",
+			"task[1/2] task_02 selected",
+			"task[2/2] task_01 selected",
+			"run completed",
+		) {
+			t.Fatalf("expected terminal sequential stream output, got %q\nstderr:\n%s", stdout, stderr)
+		}
+		if executedMultipleMode != "sequential" {
+			t.Fatalf("executed MultipleMode = %q, want sequential", executedMultipleMode)
+		}
+		if !slices.Equal(executedSelectedTasks, []string{"task_02", "task_01"}) {
+			t.Fatalf("executed selected tasks = %#v, want task_02, task_01", executedSelectedTasks)
+		}
+		if strings.Contains(stdout, "task_03") {
+			t.Fatalf("unselected task_03 appeared in sequential stream:\n%s", stdout)
+		}
+	})
+}
+
+func readCLIFileContents(t *testing.T, paths ...string) map[string]string {
+	t.Helper()
+	contents := make(map[string]string, len(paths))
+	for _, path := range paths {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		contents[path] = string(content)
+	}
+	return contents
+}
+
+func assertCLIFileContentsUnchanged(t *testing.T, want map[string]string) {
+	t.Helper()
+	for path, wantContent := range want {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s after command: %v", path, err)
+		}
+		if string(got) != wantContent {
+			t.Fatalf(
+				"source file %s changed during parallel execution\nwant:\n%s\ngot:\n%s",
+				path,
+				wantContent,
+				string(got),
+			)
+		}
+	}
+}
+
+func readCLIJSONFile(t *testing.T, path string, target any) {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if err := json.Unmarshal(content, target); err != nil {
+		t.Fatalf("decode %s: %v\n%s", path, err, string(content))
+	}
+}
+
+func gitStatusPorcelainForCLI(t *testing.T, workspaceRoot string) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", "status", "--porcelain")
+	cmd.Dir = workspaceRoot
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git status --porcelain in %s failed: %v: %s", workspaceRoot, err, strings.TrimSpace(string(output)))
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func initCLIParallelWorktreeGitRepo(t *testing.T, workspaceRoot string) {

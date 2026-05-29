@@ -9,6 +9,7 @@ Keep only durable, cross-task context here. Do not duplicate facts that are obvi
 - Task 03 is implemented and verified. Parallel mode now provisions retained daemon-home git worktrees before child launch and exposes per-task worktree metadata on prepared multi-run state.
 - Task 04 is implemented and verified. Parallel selected-task runs now use daemon parent-child orchestration: all selected child runs launch against their assigned retained worktrees, parent events observe child terminal states as they arrive, and final snapshots/summaries remain selected-task ordered.
 - Task 05 is implemented and verified. Parallel child task runs now defer workflow task-file reconciliation, skip daemon workflow sync/watch setup, and report parent-facing display outcomes separately from child run lifecycle status.
+- Task 06 is implemented and verified. Parallel parent runs now write `parallel-handoff.md`, `parallel-summary.json`, and `parallel-worktrees.json` under the parent run artifacts directory and surface handoff summaries through terminal run payloads.
 
 ## Shared Decisions
 
@@ -19,6 +20,7 @@ Keep only durable, cross-task context here. Do not duplicate facts that are obvi
 - Retained parallel worktrees live under the daemon home cache (`.compozy/cache/task-worktrees/...`) and are intentionally left for later inspection/fan-in.
 - Parallel child run truth is two-phase: child lifecycle `status` reports execution completion/failure/cancelation, while parent-facing `display_status` can report `unchanged` when git snapshot evidence shows no workspace changes.
 - Parent cancellation must not overwrite child truth: future parent/observer changes should preserve any child run that is already terminal instead of replacing it with a coordinator-level canceled item state.
+- Failed parallel parent runs can carry a terminal `summary_message` on `RunFailedPayload` so operators still see the handoff artifact pointer when one or more children failed after artifacts were written.
 
 ## Shared Learnings
 
@@ -28,6 +30,6 @@ Keep only durable, cross-task context here. Do not duplicate facts that are obvi
 
 ## Open Risks
 
-- Handoff artifact writing remains part of later task surfaces even though current branch already has some artifact path plumbing.
+- Task 07 still needs to align observation surfaces and broader end-to-end coverage on top of the completed handoff artifact behavior.
 
 ## Handoffs

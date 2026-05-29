@@ -1,5 +1,5 @@
 ---
-status: pending
+status: completed
 title: Persist handoff artifacts and final operator summaries
 type: backend
 complexity: high
@@ -12,11 +12,14 @@ dependencies:
 
 ## Overview
 
-This task produces the user-visible finish line for parallel runs. It writes the durable handoff artifacts required by the TechSpec and ADRs, then surfaces a concise final summary plus a copy-paste-ready prompt pointer so the operator can move directly into fan-in and review work.
+This is an execution-only task against an already approved design. Implement the approved parent-run handoff artifacts and final summary behavior directly so the operator gets the required durable files and copy-paste prompt without reopening product or UX design.
 
 <critical>
 - ALWAYS READ the PRD and TechSpec before starting
 - REFERENCE TECHSPEC for implementation details — do not duplicate here
+- PRD AND TECHSPEC ARE ALREADY APPROVED — do not reopen design review
+- DO NOT INVOKE BRAINSTORMING OR CREATE NEW DESIGN DOCS — proceed directly to implementation and tests
+- MINIMIZE EXPLORATION — prefer direct reads of the listed files over spawning exploratory subagents unless blocked
 - FOCUS ON "WHAT" — describe what needs to be accomplished, not how
 - MINIMIZE CODE — show code only to illustrate current structure or problem areas
 - TESTS REQUIRED — every task MUST include tests in deliverables
@@ -30,14 +33,16 @@ This task produces the user-visible finish line for parallel runs. It writes the
 </requirements>
 
 ## Subtasks
-- [ ] 6.1 Define and write the durable parent handoff artifact set in the run directory.
-- [ ] 6.2 Build the machine-readable outcome summary and worktree manifest from parent-child results.
-- [ ] 6.3 Surface a concise final summary and prompt pointer in operator-facing output.
-- [ ] 6.4 Add regression coverage for artifact paths, contents, and final summary behavior.
+- [x] 6.1 Define and write the durable parent handoff artifact set in the run directory.
+- [x] 6.2 Build the machine-readable outcome summary and worktree manifest from parent-child results.
+- [x] 6.3 Surface a concise final summary and prompt pointer in operator-facing output.
+- [x] 6.4 Add regression coverage for artifact paths, contents, and final summary behavior.
 
 ## Implementation Details
 
 Reference the TechSpec sections "Parent-Run Artifact Files", "Monitoring and Observability", and "Known Risks". Keep durable content in run artifacts and avoid shifting this output into `.compozy/tasks/<slug>`.
+
+Primary edit surface for this task should stay bounded to parent-run artifact and summary plumbing such as `internal/core/model/artifacts.go`, `internal/daemon/task_multi.go`, `internal/daemon/run_manager.go`, and the related tests listed below.
 
 ### Relevant Files
 - `internal/core/model/artifacts.go` — canonical run artifact layout and helper paths.

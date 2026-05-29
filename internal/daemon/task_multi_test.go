@@ -975,6 +975,61 @@ func TestRunManagerTaskRunMultipleIncludeCompletedStartsCompletedWorkflow(t *tes
 	})
 }
 
+func TestTaskMultiSnapshotBuilderPreservesPayloadIndexOrder(t *testing.T) {
+	t.Parallel()
+
+	builder := newTaskMultiSnapshotBuilder()
+	eventsToApply := []eventspkg.Event{
+		mustTaskMultiEvent(t, eventspkg.EventKindTaskRunMultipleChildCompleted, kinds.TaskRunMultiplePayload{
+			Slug:       "task_02",
+			Index:      1,
+			Total:      3,
+			Status:     taskMultiItemStatusCompleted,
+			ChildRunID: "child-task_02",
+		}),
+		mustTaskMultiEvent(t, eventspkg.EventKindTaskRunMultipleChildStarted, kinds.TaskRunMultiplePayload{
+			Slug:       "task_01",
+			Index:      0,
+			Total:      3,
+			Status:     taskMultiItemStatusRunning,
+			ChildRunID: "child-task_01",
+		}),
+		mustTaskMultiEvent(t, eventspkg.EventKindTaskRunMultipleItemQueued, kinds.TaskRunMultiplePayload{
+			Slug:   "task_03",
+			Index:  2,
+			Total:  3,
+			Status: taskMultiItemStatusQueued,
+		}),
+	}
+	for _, event := range eventsToApply {
+		if err := builder.applyEvent(event); err != nil {
+			t.Fatalf("applyEvent(%s) error = %v", event.Kind, err)
+		}
+	}
+
+	items := builder.snapshotItems()
+	wantSlugs := []string{"task_01", "task_02", "task_03"}
+	gotSlugs := make([]string, 0, len(items))
+	for _, item := range items {
+		gotSlugs = append(gotSlugs, item.Slug)
+	}
+	if !slices.Equal(gotSlugs, wantSlugs) {
+		t.Fatalf("snapshot slugs = %#v, want selected-task order %#v", gotSlugs, wantSlugs)
+	}
+	if items[1].RunID != "child-task_02" || items[1].Status != taskMultiItemStatusCompleted {
+		t.Fatalf("task_02 item = %#v, want completed child at index 1", items[1])
+	}
+}
+
+func mustTaskMultiEvent(t *testing.T, kind eventspkg.EventKind, payload kinds.TaskRunMultiplePayload) eventspkg.Event {
+	t.Helper()
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal task multi payload: %v", err)
+	}
+	return eventspkg.Event{RunID: "parent-run", Kind: kind, Payload: encoded}
+}
+
 func TestRunManagerTaskRunMultipleChildPollReturnsRunLookupErrors(t *testing.T) {
 	t.Parallel()
 
